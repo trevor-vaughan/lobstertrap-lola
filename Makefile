@@ -8,7 +8,7 @@ help: ## - print the help and usage
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## - build the package
+build: test ## - build the package
 	uv build
 
 .PHONY: test
