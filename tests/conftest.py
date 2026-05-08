@@ -451,6 +451,45 @@ def marketplace_disabled(tmp_path):
 
 
 @pytest.fixture
+def sample_module_with_metadata(tmp_path):
+    """Create a sample module with lola.yaml metadata."""
+    module_dir = tmp_path / "meta-module"
+    module_dir.mkdir()
+
+    # Create module/ subdirectory
+    content_dir = module_dir / "module"
+    content_dir.mkdir()
+
+    # Create lola.yaml with full metadata
+    import yaml
+
+    (content_dir / "lola.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "meta-module",
+                "version": "1.2.3",
+                "description": "A test module with metadata",
+                "author": "Test Author <test@example.com>",
+                "license": "MIT",
+                "tags": ["testing", "example"],
+                "homepage": "https://example.com/meta-module",
+                "repository": "https://github.com/test/meta-module.git",
+                "lola-version": ">=0.8.0",
+            }
+        )
+    )
+
+    # Create a skill
+    skill_dir = content_dir / "skills" / "skill1"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\ndescription: A test skill\n---\n\nTest skill content.\n"
+    )
+
+    return module_dir
+
+
+@pytest.fixture
 def integration_module(tmp_path):
     """Rich test module with skills, commands, agents, and two MCP servers."""
     module_dir = tmp_path / "test-module"

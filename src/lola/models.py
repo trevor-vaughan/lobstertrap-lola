@@ -149,6 +149,14 @@ class Module:
     post_install_hook: Optional[str] = (
         None  # Path to post-install script (relative to content_path)
     )
+    version: Optional[str] = None
+    description: Optional[str] = None
+    author: Optional[str] = None
+    license: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    homepage: Optional[str] = None
+    repository: Optional[str] = None
+    lola_version: Optional[str] = None
 
     @classmethod
     def from_path(
@@ -231,9 +239,17 @@ class Module:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Auto-discover hooks from lola.yaml
+        # Auto-discover hooks and metadata from lola.yaml
         pre_install_hook = None
         post_install_hook = None
+        mod_version = None
+        mod_description = None
+        mod_author = None
+        mod_license = None
+        mod_tags: list[str] = []
+        mod_homepage = None
+        mod_repository = None
+        mod_lola_version = None
         lola_yaml = content_path / "lola.yaml"
         if lola_yaml.exists():
             try:
@@ -246,8 +262,22 @@ class Module:
                 post_install_hook = (
                     hooks.get("post-install") if isinstance(hooks, dict) else None
                 )
+                raw_version = config.get("version")
+                if raw_version is not None:
+                    mod_version = str(raw_version)
+                mod_description = config.get("description")
+                mod_author = config.get("author")
+                mod_license = config.get("license")
+                tags_val = config.get("tags")
+                if isinstance(tags_val, list):
+                    mod_tags = [str(t) for t in tags_val if t]
+                mod_homepage = config.get("homepage")
+                mod_repository = config.get("repository")
+                raw_lola_ver = config.get("lola-version")
+                if raw_lola_ver is not None:
+                    mod_lola_version = str(raw_lola_ver)
             except (yaml.YAMLError, OSError):
-                pass  # hooks are optional; malformed lola.yaml is non-fatal
+                pass  # lola.yaml is optional; malformed file is non-fatal
 
         # Only valid if has at least one skill, command, agent, mcp, or instructions
         if (
@@ -272,6 +302,14 @@ class Module:
             is_single_skill=is_single_skill,
             pre_install_hook=pre_install_hook,
             post_install_hook=post_install_hook,
+            version=mod_version,
+            description=mod_description,
+            author=mod_author,
+            license=mod_license,
+            tags=mod_tags,
+            homepage=mod_homepage,
+            repository=mod_repository,
+            lola_version=mod_lola_version,
         )
 
     @classmethod
@@ -401,6 +439,50 @@ class Module:
                 full_path.resolve().relative_to(self.path.resolve())
             except ValueError:
                 errors.append(f"{hook_type} hook outside module directory: {hook_path}")
+
+        # Validate lola.yaml metadata fields
+        if self.version is not None:
+            try:
+                from packaging.version import Version
+
+                Version(self.version)
+            except Exception:
+                errors.append(
+                    f"Invalid version in lola.yaml: {self.version!r} "
+                    f"(expected PEP 440, e.g., 1.2.3)"
+                )
+
+        if self.lola_version is not None:
+            try:
+                from packaging.specifiers import SpecifierSet, InvalidSpecifier
+
+                SpecifierSet(self.lola_version)
+            except InvalidSpecifier:
+                errors.append(
+                    f"Invalid lola-version in lola.yaml: "
+                    f"{self.lola_version!r} "
+                    f"(expected version specifier, e.g., >=0.8.0, ^1.0, >=0.8.0,<2.0)"
+                )
+
+        if self.tags:
+            for tag in self.tags:
+                if not isinstance(tag, str) or not tag.strip():
+                    errors.append(f"Invalid tag in lola.yaml: {tag!r} (must be a non-empty string)")
+
+        return len(errors) == 0, errors
+
+    def validate_for_publish(self) -> tuple[bool, list[str]]:
+        """Validate module for marketplace publishing (stricter rules)."""
+        is_valid, errors = self.validate()
+
+        if not self.version:
+            errors.append("version is required for publishing (add to lola.yaml)")
+        if not self.description:
+            errors.append("description is required for publishing (add to lola.yaml)")
+        if not self.author:
+            errors.append("author is required for publishing (add to lola.yaml)")
+        if not self.repository:
+            errors.append("repository is required for publishing (add to lola.yaml)")
 
         return len(errors) == 0, errors
 

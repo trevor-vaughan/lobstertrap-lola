@@ -206,8 +206,8 @@ def sync_module_spec(
     # Install to each assistant
     local_modules = project_path / ".lola" / "modules"
 
-    # Extract version from module_dict if available
-    version = module_dict.get("version") if module_dict else None
+    # Module's own version takes precedence over marketplace version
+    version = module.version or (module_dict.get("version") if module_dict else None)
 
     # Resolve hooks from module_dict and module
     marketplace_hooks = module_dict.get("hooks", {}) if module_dict else {}

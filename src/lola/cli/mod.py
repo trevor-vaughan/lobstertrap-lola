@@ -400,6 +400,32 @@ def init_module(
     commands_dir.mkdir(exist_ok=True)
     agents_dir.mkdir(exist_ok=True)
 
+    # Create lola.yaml with module metadata (skipped by --minimal)
+    if not minimal:
+        lola_yaml_file = module_dir / "lola.yaml"
+        if lola_yaml_file.exists():
+            console.print(
+                f"[yellow]lola.yaml already exists, skipping:[/yellow] {lola_yaml_file}"
+            )
+        else:
+            lola_yaml_content = f"""name: {module_name}
+version: 0.1.0
+description: "[REPLACE: Brief description of this module]"
+author: "[REPLACE: Your Name <email@example.com>]"
+license: "[REPLACE: SPDX license identifier, e.g., MIT, Apache-2.0]"
+tags:
+  - "[REPLACE: tag1]"
+  - "[REPLACE: tag2]"
+# repository: https://github.com/user/{module_name}.git
+# homepage: https://github.com/user/{module_name}
+# lola-version: ">=0.8.0"
+
+# hooks:
+#   pre-install: scripts/pre.sh
+#   post-install: scripts/post.sh
+"""
+            lola_yaml_file.write_text(lola_yaml_content)
+
     # Helper for title casing names
     def _title_case(s: str) -> str:
         return s.replace("-", " ").title()
@@ -642,6 +668,7 @@ This module follows the lola module structure:
 {module_name}/
 ├── README.md           # This file (repo documentation)
 └── module/             # Lola-importable content (or lola-module/)
+    ├── lola.yaml       # Module metadata (version, author, etc.)
     ├── skills/         # Skill folders with SKILL.md
     ├── commands/       # Slash command .md files
     ├── agents/         # Subagent .md files
@@ -666,6 +693,9 @@ Edit files in `module/` (or `lola-module/`) to customize the content that gets i
     tree = Tree(f"[cyan]{module_name}/[/cyan]")
     tree.add("[dim]README.md[/dim]")
     module_node = tree.add("[cyan]module/[/cyan]")
+
+    if not minimal:
+        module_node.add("[dim]lola.yaml[/dim]")
 
     if final_skill_name or not minimal:
         skills_node = module_node.add("[dim]skills/[/dim]")
@@ -692,6 +722,8 @@ Edit files in `module/` (or `lola-module/`) to customize the content that gets i
 
     steps = []
     steps.append("Replace [REPLACE: ...] markers with your content")
+    if not minimal:
+        steps.append("Edit module/lola.yaml with your module metadata")
     if final_skill_name:
         steps.append(
             f"Edit module/skills/{final_skill_name}/SKILL.md with your skill content"
@@ -848,7 +880,8 @@ def list_modules(verbose: bool):
     console.print()
 
     for module in modules:
-        console.print(f"[cyan]{module.name}[/cyan]")
+        version_str = f" [dim]v{module.version}[/dim]" if module.version else ""
+        console.print(f"[cyan]{module.name}[/cyan]{version_str}")
 
         skills_str = _count_str(len(module.skills), "skill")
         cmds_str = _count_str(len(module.commands), "command")
@@ -856,6 +889,8 @@ def list_modules(verbose: bool):
         console.print(f"  [dim]{skills_str}, {cmds_str}, {agents_str}[/dim]")
 
         if verbose:
+            if module.description:
+                console.print(f"  [dim]{module.description}[/dim]")
             if module.skills:
                 console.print("  [bold]Skills:[/bold]")
                 for skill in module.skills:
@@ -945,6 +980,26 @@ def module_info(module_name_or_path: str | None):
     console.print(f"[bold cyan]{module.name}[/bold cyan]")
     console.print()
     console.print(f"  [dim]Path:[/dim] {module.path}")
+
+    if module.version or module.description or module.author:
+        console.print()
+        console.print("[bold]Metadata[/bold]")
+        if module.version:
+            console.print(f"  [dim]Version:[/dim] {module.version}")
+        if module.description:
+            console.print(f"  [dim]Description:[/dim] {module.description}")
+        if module.author:
+            console.print(f"  [dim]Author:[/dim] {module.author}")
+        if module.license:
+            console.print(f"  [dim]License:[/dim] {module.license}")
+        if module.tags:
+            console.print(f"  [dim]Tags:[/dim] {', '.join(module.tags)}")
+        if module.homepage:
+            console.print(f"  [dim]Homepage:[/dim] {module.homepage}")
+        if module.repository:
+            console.print(f"  [dim]Repository:[/dim] {module.repository}")
+        if module.lola_version:
+            console.print(f"  [dim]Lola Version:[/dim] {module.lola_version}")
 
     console.print()
     console.print("[bold]Skills[/bold]")

@@ -400,6 +400,193 @@ Content.
         assert any("description" in e.lower() for e in errors)
 
 
+class TestModuleMetadata:
+    """Tests for lola.yaml module metadata parsing and validation."""
+
+    def test_from_path_with_full_metadata(self, sample_module_with_metadata):
+        """Module with full lola.yaml populates all metadata fields."""
+        module = Module.from_path(sample_module_with_metadata)
+        assert module is not None
+        assert module.version == "1.2.3"
+        assert module.description == "A test module with metadata"
+        assert module.author == "Test Author <test@example.com>"
+        assert module.license == "MIT"
+        assert sorted(module.tags) == ["example", "testing"]
+        assert module.homepage == "https://example.com/meta-module"
+        assert module.repository == "https://github.com/test/meta-module.git"
+        assert module.lola_version == ">=0.8.0"
+
+    def test_from_path_with_partial_metadata(self, tmp_path):
+        """Module with only version in lola.yaml; other fields remain None."""
+        module_dir = tmp_path / "partial-module"
+        content_dir = module_dir / "module"
+        skill_dir = content_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (content_dir / "lola.yaml").write_text("version: 2.0.0\n")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        assert module.version == "2.0.0"
+        assert module.description is None
+        assert module.author is None
+        assert module.tags == []
+
+    def test_from_path_without_lola_yaml(self, sample_module):
+        """Module without lola.yaml has all metadata fields empty/None."""
+        module = Module.from_path(sample_module)
+        assert module is not None
+        assert module.version is None
+        assert module.description is None
+        assert module.author is None
+        assert module.license is None
+        assert module.tags == []
+        assert module.homepage is None
+        assert module.repository is None
+        assert module.lola_version is None
+
+    def test_version_float_cast_to_string(self, tmp_path):
+        """YAML bare 1.0 (parsed as float) is cast to string."""
+        module_dir = tmp_path / "float-version"
+        content_dir = module_dir
+        skill_dir = content_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (content_dir / "lola.yaml").write_text("version: 1.0\n")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        assert module.version == "1.0"
+        assert isinstance(module.version, str)
+
+    def test_malformed_lola_yaml_graceful(self, tmp_path):
+        """Malformed lola.yaml doesn't crash; metadata fields stay empty."""
+        module_dir = tmp_path / "bad-yaml"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (module_dir / "lola.yaml").write_text("{{invalid yaml: [")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        assert module.version is None
+        assert module.tags == []
+
+    def test_validate_valid_version(self, tmp_path):
+        """Valid PEP 440 versions pass validation."""
+        module_dir = tmp_path / "valid-ver"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (module_dir / "lola.yaml").write_text("version: 1.2.3\n")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        is_valid, errors = module.validate()
+        assert is_valid is True
+        assert not any("version" in e.lower() for e in errors)
+
+    def test_validate_invalid_version(self, tmp_path):
+        """Invalid version string produces validation error."""
+        module_dir = tmp_path / "bad-ver"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (module_dir / "lola.yaml").write_text("version: not-a-version\n")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        is_valid, errors = module.validate()
+        assert is_valid is False
+        assert any("version" in e.lower() for e in errors)
+
+    def test_validate_invalid_lola_version(self, tmp_path):
+        """Invalid lola-version specifier produces validation error."""
+        module_dir = tmp_path / "bad-lola-ver"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (module_dir / "lola.yaml").write_text(
+            "version: 1.0.0\nlola-version: \"not a specifier!!!\"\n"
+        )
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        is_valid, errors = module.validate()
+        assert is_valid is False
+        assert any("lola-version" in e for e in errors)
+
+    def test_validate_valid_lola_version_specifiers(self, tmp_path):
+        """Various valid specifier formats pass validation."""
+        for spec in [">=0.8.0", ">=0.8.0,<2.0", ">=1.0", "==1.2.3", "~=1.2"]:
+            module_dir = tmp_path / f"spec-{spec.replace(',', '_')}"
+            skill_dir = module_dir / "skills" / "s1"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\ndescription: A skill\n---\nContent.\n"
+            )
+            (module_dir / "lola.yaml").write_text(
+                f'version: 1.0.0\nlola-version: "{spec}"\n'
+            )
+
+            module = Module.from_path(module_dir)
+            assert module is not None
+            is_valid, errors = module.validate()
+            assert is_valid is True, f"Specifier {spec!r} should be valid but got: {errors}"
+
+    def test_validate_for_publish_complete(self, sample_module_with_metadata):
+        """Module with all required publish fields passes."""
+        module = Module.from_path(sample_module_with_metadata)
+        assert module is not None
+        is_valid, errors = module.validate_for_publish()
+        assert is_valid is True
+        assert errors == []
+
+    def test_validate_for_publish_missing_fields(self, tmp_path):
+        """Module missing publish-required fields fails."""
+        module_dir = tmp_path / "no-publish"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        is_valid, errors = module.validate_for_publish()
+        assert is_valid is False
+        assert any("version" in e for e in errors)
+        assert any("description" in e for e in errors)
+        assert any("author" in e for e in errors)
+        assert any("repository" in e for e in errors)
+
+    def test_tags_non_list_ignored(self, tmp_path):
+        """tags that isn't a list is ignored gracefully."""
+        module_dir = tmp_path / "bad-tags"
+        skill_dir = module_dir / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\ndescription: A skill\n---\nContent.\n"
+        )
+        (module_dir / "lola.yaml").write_text("version: 1.0.0\ntags: not-a-list\n")
+
+        module = Module.from_path(module_dir)
+        assert module is not None
+        assert module.tags == []
+
+
 class TestValidateSkill:
     """Tests for validate_skill()."""
 

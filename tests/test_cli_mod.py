@@ -1288,3 +1288,151 @@ class TestModInfoInteractive:
 
         assert result.exit_code == 130
         assert "Cancelled" in result.output
+
+
+class TestModInitLolaYaml:
+    """Tests for lola.yaml generation in mod init."""
+
+    def test_init_creates_lola_yaml(self, cli_runner, tmp_path):
+        """Init creates lola.yaml in module/ with correct template."""
+        import os
+
+        original_dir = os.getcwd()
+
+        try:
+            os.chdir(tmp_path)
+            result = cli_runner.invoke(mod, ["init", "my-module"])
+
+            assert result.exit_code == 0
+            lola_yaml = tmp_path / "my-module" / "module" / "lola.yaml"
+            assert lola_yaml.exists()
+            content = lola_yaml.read_text()
+            assert "name: my-module" in content
+            assert "version: 0.1.0" in content
+            assert "[REPLACE:" in content
+        finally:
+            os.chdir(original_dir)
+
+    def test_init_minimal_skips_lola_yaml(self, cli_runner, tmp_path):
+        """Init with --minimal does not create lola.yaml."""
+        import os
+
+        original_dir = os.getcwd()
+
+        try:
+            os.chdir(tmp_path)
+            result = cli_runner.invoke(mod, ["init", "my-module", "--minimal"])
+
+            assert result.exit_code == 0
+            assert not (tmp_path / "my-module" / "module" / "lola.yaml").exists()
+        finally:
+            os.chdir(original_dir)
+
+    def test_init_tree_shows_lola_yaml(self, cli_runner, tmp_path):
+        """Init output tree includes lola.yaml."""
+        import os
+
+        original_dir = os.getcwd()
+
+        try:
+            os.chdir(tmp_path)
+            result = cli_runner.invoke(mod, ["init", "my-module"])
+
+            assert result.exit_code == 0
+            assert "lola.yaml" in result.output
+        finally:
+            os.chdir(original_dir)
+
+
+class TestModInfoMetadata:
+    """Tests for metadata display in mod info."""
+
+    def test_info_shows_metadata(
+        self, cli_runner, sample_module_with_metadata, tmp_path
+    ):
+        """Info command displays metadata from lola.yaml."""
+        modules_dir = tmp_path / ".lola" / "modules"
+        modules_dir.mkdir(parents=True)
+
+        shutil.copytree(sample_module_with_metadata, modules_dir / "meta-module")
+
+        # Save source info so load_registered_module knows content_dirname
+        from lola.parsers import save_source_info
+
+        save_source_info(
+            modules_dir / "meta-module",
+            str(sample_module_with_metadata),
+            "folder",
+            "module",
+        )
+
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["info", "meta-module"])
+
+        assert result.exit_code == 0
+        assert "Metadata" in result.output
+        assert "1.2.3" in result.output
+        assert "A test module with metadata" in result.output
+        assert "Test Author" in result.output
+
+    def test_info_no_metadata_section_without_lola_yaml(
+        self, cli_runner, sample_module, tmp_path
+    ):
+        """Info command omits Metadata section when no lola.yaml."""
+        modules_dir = tmp_path / ".lola" / "modules"
+        modules_dir.mkdir(parents=True)
+
+        shutil.copytree(sample_module, modules_dir / "sample-module")
+
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["info", "sample-module"])
+
+        assert result.exit_code == 0
+        assert "Metadata" not in result.output
+
+
+class TestModLsVersion:
+    """Tests for version display in mod ls."""
+
+    def test_ls_shows_version(
+        self, cli_runner, sample_module_with_metadata, tmp_path
+    ):
+        """Module listing shows version from lola.yaml."""
+        modules_dir = tmp_path / ".lola" / "modules"
+        modules_dir.mkdir(parents=True)
+
+        shutil.copytree(sample_module_with_metadata, modules_dir / "meta-module")
+
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["ls"])
+
+        assert result.exit_code == 0
+        assert "v1.2.3" in result.output
+
+    def test_ls_no_version_without_lola_yaml(
+        self, cli_runner, sample_module, tmp_path
+    ):
+        """Module listing without lola.yaml shows no version."""
+        modules_dir = tmp_path / ".lola" / "modules"
+        modules_dir.mkdir(parents=True)
+
+        shutil.copytree(sample_module, modules_dir / "sample-module")
+
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["ls"])
+
+        assert result.exit_code == 0
+        assert "sample-module" in result.output
+        assert " v" not in result.output

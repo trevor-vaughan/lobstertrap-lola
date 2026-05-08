@@ -586,6 +586,7 @@ def install_to_assistant(
                 assistant=assistant,
                 scope=scope,
                 project_path=project_path,
+                version=module.version,
                 skills=installed_skills,
                 commands=installed_commands,
                 agents=installed_agents,

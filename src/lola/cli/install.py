@@ -939,9 +939,11 @@ def install_cmd(
             append_context,
         )
 
-    # Update installation records with version from marketplace metadata
-    if module_dict and module_dict.get("version"):
-        version = module_dict.get("version")
+    # Update installation records with version (module's own version takes precedence)
+    effective_version = module.version or (
+        module_dict.get("version") if module_dict else None
+    )
+    if effective_version:
         for asst in assistants_to_install:
             installations = registry.find(module_name)
             for inst in installations:
@@ -950,7 +952,7 @@ def install_cmd(
                     and inst.scope == scope
                     and inst.project_path == install_project_path
                 ):
-                    inst.version = version
+                    inst.version = effective_version
                     registry.add(inst)  # Update the record
 
     console.print()
@@ -1402,7 +1404,11 @@ def list_installed_cmd(assistant: Optional[str]):
     console.print()
 
     for mod_name, insts in by_module.items():
-        console.print(f"[bold]{mod_name}[/bold]")
+        version_str = ""
+        first_version = next((i.version for i in insts if i.version), None)
+        if first_version:
+            version_str = f" [dim]v{first_version}[/dim]"
+        console.print(f"[bold]{mod_name}[/bold]{version_str}")
 
         # Group installations by (scope, path) to consolidate assistants
         by_scope_path: dict[tuple[str, str | None], list[Installation]] = {}
