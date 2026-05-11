@@ -15,10 +15,16 @@ SystemExit(130) to signal a user-initiated cancellation.
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
+from InquirerPy.separator import Separator
 from InquirerPy.validator import EmptyInputValidator
+
+if TYPE_CHECKING:
+    from lola.models import Module
+    from lola.dependencies import ComponentSelection
 
 
 def is_interactive() -> bool:
@@ -120,53 +126,109 @@ def select_marketplace(matches: list[tuple[dict, str]]) -> str | None:
     return str(result) if result is not None else None
 
 
-def prompt_command_conflict(cmd_name: str, module_name: str) -> tuple[str, str]:
-    """Prompt when a command file already exists.
-
-    Returns:
-        ("overwrite", "")         — replace existing file
-        ("rename",    "new_name") — install under new_name
-        ("skip",      "")         — do not install
-    """
+def prompt_conflict(
+    kind: str, name: str, module_name: str, sep: str = "-"
+) -> tuple[str, str]:
+    """Prompt when a component file already exists. Returns (action, new_name)."""
     action = inquirer.select(
-        message=f"'{cmd_name}' already exists. What would you like to do?",
+        message=f"'{name}' ({kind}) already exists. What would you like to do?",
         choices=[
+            Choice("overwrite_all", name="Overwrite All"),
             Choice("overwrite", name="Overwrite"),
-            Choice("rename", name="Rename command"),
+            Choice("rename", name=f"Rename {kind}"),
             Choice("skip", name="Skip"),
         ],
     ).execute()
     if action == "rename":
         new_name = inquirer.text(
-            message="New command name:",
-            default=f"{module_name}-{cmd_name}",
+            message=f"New {kind} name:",
+            default=f"{module_name}{sep}{name}",
             validate=EmptyInputValidator(),
         ).execute()
         return "rename", str(new_name)
     return str(action) if action is not None else "skip", ""
 
 
-def prompt_agent_conflict(agent_name: str, module_name: str) -> tuple[str, str]:
-    """Prompt when an agent file already exists.
+def prompt_command_conflict(name: str, module_name: str) -> tuple[str, str]:
+    return prompt_conflict("command", name, module_name)
 
-    Returns:
-        ("overwrite", "")         — replace existing file
-        ("rename",    "new_name") — install under new_name
-        ("skip",      "")         — do not install
-    """
-    action = inquirer.select(
-        message=f"'{agent_name}' already exists. What would you like to do?",
-        choices=[
-            Choice("overwrite", name="Overwrite"),
-            Choice("rename", name="Rename agent"),
-            Choice("skip", name="Skip"),
-        ],
+
+def prompt_agent_conflict(name: str, module_name: str) -> tuple[str, str]:
+    return prompt_conflict("agent", name, module_name)
+
+
+def prompt_skill_conflict(name: str, module_name: str) -> tuple[str, str]:
+    return prompt_conflict("skill", name, module_name, sep="_")
+
+
+def select_components(
+    module: Module, current: ComponentSelection | None = None
+) -> ComponentSelection | None:
+    """Show interactive picker for selecting module components."""
+    from lola.dependencies import ComponentSelection
+
+    is_update = current is not None
+    prefixes = {"skill": "", "command": "/", "agent": "@"}
+    current_sets: dict[str, set[str]] = {
+        "skill": current.skills if current else set(),
+        "command": current.commands if current else set(),
+        "agent": current.agents if current else set(),
+    }
+
+    groups: list[tuple[str, str, list[str]]] = [
+        ("Skills", "skill", sorted(module.skills)),
+        ("Commands", "command", sorted(module.commands)),
+        ("Agents", "agent", sorted(module.agents)),
+    ]
+
+    choices: list[Separator | Choice] = []
+    for header, comp_type, names in groups:
+        if not names:
+            continue
+        choices.append(Separator(header))
+        for name in names:
+            is_current = name in current_sets[comp_type]
+            enabled = is_current if is_update else True
+            suffix = ""
+            if is_update:
+                suffix = " (installed)" if is_current else " (new)"
+            choices.append(
+                Choice(
+                    value={"name": name, "type": comp_type},
+                    name=f"  {prefixes[comp_type]}{name}{suffix}",
+                    enabled=enabled,
+                )
+            )
+        choices.append(Separator(""))
+
+    if module.mcps or module.has_instructions:
+        choices.append(Separator("Always Included"))
+        if module.has_instructions:
+            choices.append(Choice(value=None, name="  instructions (AGENTS.md)", enabled=False))
+        for mcp in sorted(module.mcps):
+            choices.append(Choice(value=None, name=f"  mcp:{mcp}", enabled=False))
+
+    message = "Update component selection:" if is_update else "Select components to install:"
+    result = inquirer.checkbox(
+        message=message,
+        choices=choices,
+        instruction="(Space: toggle | Ctrl-A: select all | Ctrl-R: invert | Enter: confirm)",
     ).execute()
-    if action == "rename":
-        new_name = inquirer.text(
-            message="New agent name:",
-            default=f"{module_name}-{agent_name}",
-            validate=EmptyInputValidator(),
-        ).execute()
-        return "rename", str(new_name)
-    return str(action) if action is not None else "skip", ""
+
+    if result is None:
+        return None
+
+    selection = ComponentSelection()
+    for item in result:
+        if item is None:
+            continue
+        comp_type = item["type"]
+        comp_name = item["name"]
+        if comp_type == "skill":
+            selection.skills.add(comp_name)
+        elif comp_type == "command":
+            selection.commands.add(comp_name)
+        elif comp_type == "agent":
+            selection.agents.add(comp_name)
+
+    return selection

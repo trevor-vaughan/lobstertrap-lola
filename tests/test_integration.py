@@ -331,6 +331,11 @@ class TestUpdateOrphans:
         ).exists()
 
     def test_new_command_added(self, integration_env):
+        """New commands added to module are NOT auto-installed during update.
+
+        Update preserves the original selection. To add new components,
+        use --commands flag or interactive mode.
+        """
         _install(integration_env, "claude-code")
         (
             integration_env["modules"] / "test-module" / "commands" / "deploy.md"
@@ -340,11 +345,17 @@ class TestUpdateOrphans:
 
         _update(integration_env)
 
-        assert (
+        # New command should NOT be auto-added
+        assert not (
             integration_env["project"] / ".claude" / "commands" / "deploy.md"
         ).exists()
 
     def test_new_agent_added(self, integration_env):
+        """New agents added to module are NOT auto-installed during update.
+
+        Update preserves the original selection. To add new components,
+        use --agents flag or interactive mode.
+        """
         _install(integration_env, "claude-code")
         (
             integration_env["modules"] / "test-module" / "agents" / "deploy-agent.md"
@@ -354,7 +365,8 @@ class TestUpdateOrphans:
 
         _update(integration_env)
 
-        assert (
+        # New agent should NOT be auto-added
+        assert not (
             integration_env["project"] / ".claude" / "agents" / "deploy-agent.md"
         ).exists()
 

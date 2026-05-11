@@ -4,6 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from lola.prompts import (
     is_interactive,
+    prompt_agent_conflict,
+    prompt_command_conflict,
+    prompt_conflict,
+    prompt_skill_conflict,
     select_assistants,
     select_installations,
     select_marketplace,
@@ -222,3 +226,74 @@ def test_select_marketplace_name_cancelled_returns_none():
     with patch("lola.prompts.inquirer.select", return_value=mock_prompt):
         result = select_marketplace_name(["official", "community"])
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# prompt_conflict (core) + wrapper smoke tests
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_conflict_overwrite():
+    mock_prompt = MagicMock()
+    mock_prompt.execute.return_value = "overwrite"
+    with patch("lola.prompts.inquirer.select", return_value=mock_prompt):
+        action, new_name = prompt_conflict("command", "test-cmd", "test-module")
+    assert action == "overwrite"
+    assert new_name == ""
+
+
+def test_prompt_conflict_overwrite_all():
+    mock_prompt = MagicMock()
+    mock_prompt.execute.return_value = "overwrite_all"
+    with patch("lola.prompts.inquirer.select", return_value=mock_prompt):
+        action, new_name = prompt_conflict("agent", "test-agent", "test-module")
+    assert action == "overwrite_all"
+    assert new_name == ""
+
+
+def test_prompt_conflict_skip():
+    mock_prompt = MagicMock()
+    mock_prompt.execute.return_value = "skip"
+    with patch("lola.prompts.inquirer.select", return_value=mock_prompt):
+        action, new_name = prompt_conflict("skill", "test-skill", "test-module")
+    assert action == "skip"
+    assert new_name == ""
+
+
+def test_prompt_conflict_rename():
+    mock_select = MagicMock()
+    mock_select.execute.return_value = "rename"
+    mock_text = MagicMock()
+    mock_text.execute.return_value = "new-name"
+    with patch("lola.prompts.inquirer.select", return_value=mock_select), \
+         patch("lola.prompts.inquirer.text", return_value=mock_text):
+        action, new_name = prompt_conflict("command", "test-cmd", "test-module")
+    assert action == "rename"
+    assert new_name == "new-name"
+
+
+def test_prompt_conflict_cancelled():
+    mock_prompt = MagicMock()
+    mock_prompt.execute.return_value = None
+    with patch("lola.prompts.inquirer.select", return_value=mock_prompt):
+        action, new_name = prompt_conflict("command", "test-cmd", "test-module")
+    assert action == "skip"
+    assert new_name == ""
+
+
+def test_prompt_command_conflict_delegates():
+    with patch("lola.prompts.prompt_conflict", return_value=("skip", "")) as mock:
+        prompt_command_conflict("cmd1", "mod")
+    mock.assert_called_once_with("command", "cmd1", "mod")
+
+
+def test_prompt_agent_conflict_delegates():
+    with patch("lola.prompts.prompt_conflict", return_value=("skip", "")) as mock:
+        prompt_agent_conflict("agent1", "mod")
+    mock.assert_called_once_with("agent", "agent1", "mod")
+
+
+def test_prompt_skill_conflict_delegates_with_underscore_sep():
+    with patch("lola.prompts.prompt_conflict", return_value=("skip", "")) as mock:
+        prompt_skill_conflict("skill1", "mod")
+    mock.assert_called_once_with("skill", "skill1", "mod", sep="_")

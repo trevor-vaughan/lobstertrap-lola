@@ -17,13 +17,18 @@ import subprocess  # nosec B404 - required for running install hook scripts
 from pathlib import Path
 from typing import Optional, cast
 
-import click
 from rich.console import Console
 
 import lola.config as config
+from lola.dependencies import ComponentSelection
 from lola.exceptions import InstallationError
 from lola.models import Installation, InstallationRegistry, Module
-from lola.prompts import is_interactive, prompt_agent_conflict, prompt_command_conflict
+from lola.prompts import (
+    is_interactive,
+    prompt_agent_conflict,
+    prompt_command_conflict,
+    prompt_skill_conflict,
+)
 
 from .base import (
     AssistantTarget,
@@ -173,18 +178,10 @@ def _check_skill_exists(
     """Check if a skill already exists at the destination."""
     if not project_path and scope == "project":
         return False
-
-    skill_dest = target.get_skill_path(project_path or "", scope)
-
     if target.uses_managed_section:
-        # For managed sections, we allow overwriting since skills are grouped by module
         return False
-    else:
-        # For file-based targets, check if directory/file exists
-        if target.name == "cursor":
-            return (skill_dest / f"{skill_name}.mdc").exists()
-        else:
-            return (skill_dest / skill_name).exists()
+    skill_dest = target.get_skill_path(project_path or "", scope)
+    return (skill_dest / skill_name).exists()
 
 
 def _install_skills(
@@ -194,9 +191,19 @@ def _install_skills(
     project_path: str | None,
     scope: str = "project",
     force: bool = False,
+    component_selection: Optional[ComponentSelection] = None,
 ) -> tuple[list[str], list[str]]:
     """Install skills for a target. Returns (installed, failed) lists."""
     if not module.skills:
+        return [], []
+
+    # Filter skills based on selection
+    if component_selection is None:
+        skills_to_install = module.skills
+    else:
+        skills_to_install = [s for s in module.skills if s in component_selection.skills]
+
+    if not skills_to_install:
         return [], []
 
     installed: list[str] = []
@@ -211,7 +218,7 @@ def _install_skills(
     # Batch updates for managed section targets (Gemini, OpenCode)
     if target.uses_managed_section:
         batch_skills: list[tuple[str, str, Path]] = []
-        for skill in module.skills:
+        for skill in skills_to_install:
             source = _skill_source_dir(local_module_path, skill, content_dirname)
             if source.exists():
                 batch_skills.append((skill, _get_skill_description(source), source))
@@ -223,29 +230,26 @@ def _install_skills(
                 skill_dest, module.name, batch_skills, project_path
             )
     else:
-        for skill in module.skills:
+        overwrite_all = False
+        for skill in skills_to_install:
             source = _skill_source_dir(local_module_path, skill, content_dirname)
-            skill_name = skill  # Use unprefixed name by default
+            skill_name = skill
 
-            # Check if skill already exists
             if _check_skill_exists(target, skill_name, project_path, scope):
-                if force:
-                    # Force mode: overwrite without prompting
+                if force or overwrite_all:
                     pass
-                elif click.confirm(
-                    f"Skill '{skill_name}' already exists. Overwrite?", default=False
-                ):
-                    # User chose to overwrite
-                    pass
-                elif click.confirm(
-                    f"Use prefixed name '{module.name}_{skill}' instead?", default=True
-                ):
-                    # User chose to use prefixed name
-                    skill_name = f"{module.name}_{skill}"
-                else:
-                    # User declined both options, skip this skill
-                    console.print(f"  [yellow]Skipped {skill}[/yellow]")
+                elif not is_interactive():
+                    failed.append(skill)
                     continue
+                else:
+                    action, new_name = prompt_skill_conflict(skill, module.name)
+                    if action == "skip":
+                        failed.append(skill)
+                        continue
+                    elif action == "rename":
+                        skill_name = new_name
+                    elif action == "overwrite_all":
+                        overwrite_all = True
 
             if target.generate_skill(source, skill_dest, skill_name, project_path):
                 installed.append(skill_name)
@@ -262,13 +266,24 @@ def _install_commands(
     project_path: str | None,
     force: bool = False,
     scope: str = "project",
+    component_selection: Optional[ComponentSelection] = None,
 ) -> tuple[list[str], list[str]]:
     """Install commands for a target. Returns (installed, failed) lists."""
     if not module.commands:
         return [], []
 
+    # Filter commands based on selection
+    if component_selection is None:
+        commands_to_install = module.commands
+    else:
+        commands_to_install = [c for c in module.commands if c in component_selection.commands]
+
+    if not commands_to_install:
+        return [], []
+
     installed: list[str] = []
     failed: list[str] = []
+    overwrite_all = False
 
     path_context = project_path or ""
     command_dest = target.get_command_path(path_context, scope)
@@ -276,12 +291,12 @@ def _install_commands(
     content_dirname = _get_content_dirname(module)
     content_path = _get_content_path(local_module_path, content_dirname)
     commands_dir = content_path / "commands"
-    for cmd in module.commands:
+    for cmd in commands_to_install:
         source = commands_dir / f"{cmd}.md"
         effective_cmd = cmd
 
         dest_file = command_dest / target.get_command_filename(module.name, cmd)
-        if dest_file.exists() and not force:
+        if dest_file.exists() and not force and not overwrite_all:
             if not is_interactive():
                 failed.append(cmd)
                 continue
@@ -291,6 +306,8 @@ def _install_commands(
                 continue
             elif action == "rename":
                 effective_cmd = new_name
+            elif action == "overwrite_all":
+                overwrite_all = True
 
         if target.generate_command(source, command_dest, effective_cmd, module.name):
             installed.append(effective_cmd)
@@ -307,9 +324,19 @@ def _install_agents(
     project_path: str | None,
     force: bool = False,
     scope: str = "project",
+    component_selection: Optional[ComponentSelection] = None,
 ) -> tuple[list[str], list[str]]:
     """Install agents for a target. Returns (installed, failed) lists."""
     if not module.agents or not target.supports_agents:
+        return [], []
+
+    # Filter agents based on selection
+    if component_selection is None:
+        agents_to_install = module.agents
+    else:
+        agents_to_install = [a for a in module.agents if a in component_selection.agents]
+
+    if not agents_to_install:
         return [], []
 
     path_context = project_path or ""
@@ -319,16 +346,17 @@ def _install_agents(
 
     installed: list[str] = []
     failed: list[str] = []
+    overwrite_all = False
 
     content_dirname = _get_content_dirname(module)
     content_path = _get_content_path(local_module_path, content_dirname)
     agents_dir = content_path / "agents"
-    for agent in module.agents:
+    for agent in agents_to_install:
         source = agents_dir / f"{agent}.md"
         effective_agent = agent
 
         dest_file = agent_dest / target.get_agent_filename(module.name, agent)
-        if dest_file.exists() and not force:
+        if dest_file.exists() and not force and not overwrite_all:
             if not is_interactive():
                 failed.append(agent)
                 continue
@@ -338,6 +366,8 @@ def _install_agents(
                 continue
             elif action == "rename":
                 effective_agent = new_name
+            elif action == "overwrite_all":
+                overwrite_all = True
 
         if target.generate_agent(source, agent_dest, effective_agent, module.name):
             installed.append(effective_agent)
@@ -517,6 +547,7 @@ def install_to_assistant(
     pre_install_script: Optional[str] = None,
     post_install_script: Optional[str] = None,
     append_context: Optional[str] = None,
+    component_selection: Optional[ComponentSelection] = None,
 ) -> int:
     """Install module to a specific assistant."""
     # Late import to avoid circular imports - get_target is defined in __init__.py
@@ -542,18 +573,25 @@ def install_to_assistant(
                 shutil.rmtree(local_module_path)
             raise
 
+    # If component_selection provided, filter module components
+    # Default to all components if not specified
+    if component_selection is None:
+        component_selection = ComponentSelection.all_from_module(module)
+
     installed_skills, failed_skills = _install_skills(
-        target, module, local_module_path, project_path, scope, force
+        target, module, local_module_path, project_path, scope, force, component_selection
     )
     installed_commands, failed_commands = _install_commands(
-        target, module, local_module_path, project_path, force, scope
+        target, module, local_module_path, project_path, force, scope, component_selection
     )
     installed_agents, failed_agents = _install_agents(
-        target, module, local_module_path, project_path, force, scope
+        target, module, local_module_path, project_path, force, scope, component_selection
     )
+    # MCPs are always installed regardless of selection
     installed_mcps, failed_mcps = _install_mcps(
         target, module, local_module_path, project_path, scope
     )
+    # Instructions are always installed regardless of selection
     instructions_installed = _install_instructions(
         target, module, local_module_path, project_path, append_context, scope
     )

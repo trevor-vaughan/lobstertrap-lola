@@ -31,8 +31,16 @@ from lola.cli.mod import (
 from lola.prompts import (
     is_interactive,
     select_assistants,
+    select_components,
     select_installations,
     select_module,
+)
+from lola.dependencies import (
+    parse_component_flags,
+    validate_component_selection,
+    resolve_dependencies,
+    ComponentSelection,
+    ComponentSelectionError,
 )
 from lola.targets import (
     AssistantTarget,
@@ -50,6 +58,19 @@ from lola.utils import ensure_lola_dirs, get_local_modules_path
 from lola.cli.utils import handle_lola_error
 
 console = Console()
+
+
+def _strip_module_prefix(names: list[str], module_name: str) -> set[str]:
+    result = set()
+    for name in names:
+        for sep in ("_", ".", "-"):
+            prefix = f"{module_name}{sep}"
+            if name.startswith(prefix):
+                result.add(name[len(prefix):])
+                break
+        else:
+            result.add(name)
+    return result
 
 
 def _resolve_install_path(
@@ -377,7 +398,7 @@ def _update_skills(
 
     Returns (success_count, failed_count).
     """
-    if not ctx.global_module.skills:
+    if not ctx.current_skills:
         return 0, 0
 
     skills_ok = 0
@@ -386,7 +407,7 @@ def _update_skills(
     if ctx.target.uses_managed_section:
         # Managed section targets: Update entries in GEMINI.md/AGENTS.md
         batch_skills = []
-        for skill in ctx.global_module.skills:
+        for skill in ctx.current_skills:
             source = _skill_source_dir(ctx.source_module, skill)
             if source.exists():
                 description = _get_skill_description(source)
@@ -409,7 +430,7 @@ def _update_skills(
                 ctx.inst.project_path,
             )
     else:
-        for skill in ctx.global_module.skills:
+        for skill in ctx.current_skills:
             source = _skill_source_dir(ctx.source_module, skill)
 
             # Check if another module owns this skill name
@@ -449,7 +470,7 @@ def _update_commands(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
 
     Returns (success_count, failed_count).
     """
-    if not ctx.global_module.commands:
+    if not ctx.current_commands:
         return 0, 0
 
     commands_ok = 0
@@ -461,7 +482,7 @@ def _update_commands(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
     content_path = _get_content_path(ctx.source_module)
     commands_dir = content_path / "commands"
 
-    for cmd_name in ctx.global_module.commands:
+    for cmd_name in ctx.current_commands:
         source = commands_dir / f"{cmd_name}.md"
         success = ctx.target.generate_command(
             source, command_dest, cmd_name, ctx.inst.module_name
@@ -487,7 +508,7 @@ def _update_agents(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
 
     Returns (success_count, failed_count).
     """
-    if not ctx.global_module.agents or not ctx.target.supports_agents:
+    if not ctx.current_agents or not ctx.target.supports_agents:
         return 0, 0
 
     path_context = ctx.inst.project_path or ""
@@ -501,7 +522,7 @@ def _update_agents(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
 
     content_path = _get_content_path(ctx.source_module)
     agents_dir = content_path / "agents"
-    for agent_name in ctx.global_module.agents:
+    for agent_name in ctx.current_agents:
         source = agents_dir / f"{agent_name}.md"
         success = ctx.target.generate_agent(
             source, agent_dest, agent_name, ctx.inst.module_name
@@ -613,7 +634,9 @@ def _update_mcps(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
     return 0, len(ctx.global_module.mcps)
 
 
-def _process_single_installation(ctx: UpdateContext, verbose: bool) -> UpdateResult:
+def _process_single_installation(
+    ctx: UpdateContext, verbose: bool, selected_components: ComponentSelection
+) -> UpdateResult:
     """
     Process a single installation update.
 
@@ -626,6 +649,16 @@ def _process_single_installation(ctx: UpdateContext, verbose: bool) -> UpdateRes
     scope = ctx.inst.scope
 
     skill_dest = ctx.target.get_skill_path(path_context, scope)
+
+    # Filter based on selection
+    ctx.current_skills = ctx.current_skills & selected_components.skills
+    ctx.current_commands = ctx.current_commands & selected_components.commands
+    ctx.current_agents = ctx.current_agents & selected_components.agents
+
+    # Recalculate orphans (components in registry but not in new selection)
+    ctx.orphaned_skills = set(ctx.inst.skills) - ctx.current_skills
+    ctx.orphaned_commands = set(ctx.inst.commands) - ctx.current_commands
+    ctx.orphaned_agents = set(ctx.inst.agents) - ctx.current_agents
 
     # Remove orphaned items
     result.orphans_removed += _remove_orphaned_skills(ctx, skill_dest, verbose)
@@ -750,6 +783,24 @@ def _format_update_summary(result: UpdateResult) -> str:
     default="project",
     help="Installation scope: project (default) or user",
 )
+@click.option(
+    "--skills",
+    type=str,
+    default=None,
+    help="Comma-separated list of skills to install",
+)
+@click.option(
+    "--commands",
+    type=str,
+    default=None,
+    help="Comma-separated list of commands to install",
+)
+@click.option(
+    "--agents",
+    type=str,
+    default=None,
+    help="Comma-separated list of agents to install",
+)
 @click.argument("project_path", required=False, default="./")
 def install_cmd(
     module_name: Optional[str],
@@ -761,6 +812,9 @@ def install_cmd(
     append_context: Optional[str],
     workspace: Optional[str],
     scope: str,
+    skills: Optional[str],
+    commands: Optional[str],
+    agents: Optional[str],
     project_path: str,
 ):
     """
@@ -893,6 +947,56 @@ def install_cmd(
         )
         return
 
+    selected_components = parse_component_flags(skills, commands, agents)
+
+    # If no flags and interactive, show picker
+    if selected_components is None and is_interactive():
+        # Only show picker if module has multiple components
+        total_components = len(module.skills) + len(module.commands) + len(module.agents)
+        if total_components > 1:
+            try:
+                selected_components = select_components(module)
+                if selected_components is None:
+                    console.print("[yellow]Cancelled[/yellow]")
+                    raise SystemExit(130)
+            except (EOFError, ValueError):
+                # stdin is closed (e.g., in tests) - skip picker and install everything
+                pass
+
+    # If still no selection, install everything (backward compat)
+    if selected_components is None:
+        selected_components = ComponentSelection.all_from_module(module)
+
+    # Validate selection
+    try:
+        validate_component_selection(module, selected_components)
+    except ComponentSelectionError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print("[dim]Use 'lola mod info <module>' to see available components[/dim]")
+        raise SystemExit(1)
+
+    # Resolve dependencies
+    resolved_components = resolve_dependencies(module, selected_components)
+
+    # Show what will be installed if dependencies were added
+    if resolved_components.skills != selected_components.skills or \
+       resolved_components.commands != selected_components.commands or \
+       resolved_components.agents != selected_components.agents:
+
+        added_skills = resolved_components.skills - selected_components.skills
+        added_commands = resolved_components.commands - selected_components.commands
+        added_agents = resolved_components.agents - selected_components.agents
+
+        if added_skills or added_commands or added_agents:
+            console.print()
+            console.print("[dim]Dependencies added:[/dim]")
+            for skill in sorted(added_skills):
+                console.print(f"  [dim]+ {skill} (dependency)[/dim]")
+            for cmd in sorted(added_commands):
+                console.print(f"  [dim]+ /{cmd} (dependency)[/dim]")
+            for agent in sorted(added_agents):
+                console.print(f"  [dim]+ @{agent} (dependency)[/dim]")
+
     # Get registry
     registry = get_registry()
 
@@ -937,6 +1041,7 @@ def install_cmd(
             effective_pre_install,
             effective_post_install,
             append_context,
+            resolved_components,
         )
 
     # Update installation records with version from marketplace metadata
@@ -1262,7 +1367,32 @@ def uninstall_cmd(
     is_flag=True,
     help="Show detailed output for each skill and command",
 )
-def update_cmd(module_name: Optional[str], assistant: Optional[str], verbose: bool):
+@click.option(
+    "--skills",
+    type=str,
+    default=None,
+    help="Comma-separated list of skills to install",
+)
+@click.option(
+    "--commands",
+    type=str,
+    default=None,
+    help="Comma-separated list of commands to install",
+)
+@click.option(
+    "--agents",
+    type=str,
+    default=None,
+    help="Comma-separated list of agents to install",
+)
+def update_cmd(
+    module_name: Optional[str],
+    assistant: Optional[str],
+    verbose: bool,
+    skills: Optional[str],
+    commands: Optional[str],
+    agents: Optional[str],
+):
     """
     Regenerate assistant files from source in .lola/modules/.
 
@@ -1336,8 +1466,64 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str], verbose: bo
                     )
                     continue
 
+                current_selection = ComponentSelection(
+                    skills=_strip_module_prefix(inst.skills, inst.module_name),
+                    commands=_strip_module_prefix(inst.commands, inst.module_name),
+                    agents=_strip_module_prefix(inst.agents, inst.module_name),
+                )
+
+                # Filter current selection to only include components that still exist in module
+                # Components that were removed from module will become orphaned
+                available_selection = ComponentSelection(
+                    skills=current_selection.skills & set(ctx.global_module.skills),
+                    commands=current_selection.commands & set(ctx.global_module.commands),
+                    agents=current_selection.agents & set(ctx.global_module.agents),
+                )
+
+                # Determine new selection
+                new_selection = None
+
+                # Parse CLI flags
+                flag_selection = parse_component_flags(skills, commands, agents)
+                if flag_selection is not None:
+                    new_selection = flag_selection
+                elif is_interactive():
+                    # Show picker with current selection pre-checked (only available components)
+                    new_selection = select_components(
+                        ctx.global_module, current=available_selection
+                    )
+                    if new_selection is None:
+                        console.print("[yellow]Skipping (cancelled)[/yellow]")
+                        continue
+
+                # If no new selection (non-interactive, no flags), keep available selection
+                if new_selection is None:
+                    new_selection = available_selection
+
+                # Validate and resolve
+                # Skip validation if selection is empty but module has instructions only
+                if new_selection.is_empty() and not ctx.global_module.has_instructions:
+                    console.print(
+                        f"    [red]{inst.assistant}: Must select at least one component[/red]"
+                    )
+                    continue
+
+                if not new_selection.is_empty():
+                    try:
+                        validate_component_selection(ctx.global_module, new_selection)
+                    except ComponentSelectionError as e:
+                        console.print(f"    [red]{inst.assistant}: {e}[/red]")
+                        continue
+
+                    resolved_selection = resolve_dependencies(
+                        ctx.global_module, new_selection
+                    )
+                else:
+                    # Empty selection, but has instructions
+                    resolved_selection = new_selection
+
                 # Process the installation update
-                result = _process_single_installation(ctx, verbose)
+                result = _process_single_installation(ctx, verbose, resolved_selection)
 
                 # Update the registry with actual installed skills (may include prefixed names)
                 inst.skills = list(ctx.installed_skills)

@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 
 
 from lola.targets import get_registry, copy_module_to_local, install_to_assistant
+from lola.targets.install import _install_commands, _install_agents, _install_skills
 from lola.models import Module, InstallationRegistry
 
 
@@ -424,3 +425,136 @@ echo "HOOK=$LOLA_HOOK" >> {output_file}
             )
 
         assert "outside module directory" in str(exc_info.value)
+
+
+class TestOverwriteAllBypass:
+    """Tests for overwrite_all behavior in _install_commands, _install_agents, _install_skills."""
+
+    def _create_module(self, tmp_path, commands=None, agents=None, skills=None):
+        """Create a test module with specified components."""
+        module_dir = tmp_path / "modules" / "testmod"
+        module_dir.mkdir(parents=True)
+
+        if skills:
+            skills_root = module_dir / "skills"
+            skills_root.mkdir()
+            for skill in skills:
+                skill_dir = skills_root / skill
+                skill_dir.mkdir()
+                (skill_dir / "SKILL.md").write_text(f"---\ndescription: {skill}\n---\n# {skill}\n")
+
+        if commands:
+            commands_dir = module_dir / "commands"
+            commands_dir.mkdir()
+            for cmd in commands:
+                (commands_dir / f"{cmd}.md").write_text(f"---\ndescription: {cmd}\n---\nDo {cmd}.\n")
+
+        if agents:
+            agents_dir = module_dir / "agents"
+            agents_dir.mkdir()
+            for agent in agents:
+                (agents_dir / f"{agent}.md").write_text(f"---\ndescription: {agent}\n---\n# {agent}\n")
+
+        return Module.from_path(module_dir)
+
+    def test_commands_overwrite_all_skips_subsequent_prompts(self, tmp_path):
+        module = self._create_module(tmp_path, commands=["cmd-a", "cmd-b", "cmd-c"])
+        local_module_path = tmp_path / "modules" / "testmod"
+        command_dest = tmp_path / "dest" / "commands"
+        command_dest.mkdir(parents=True)
+
+        mock_target = MagicMock()
+        mock_target.get_command_path.return_value = command_dest
+        mock_target.get_command_filename.side_effect = lambda mod, cmd: f"{cmd}.md"
+        mock_target.generate_command.return_value = True
+
+        for cmd in ["cmd-a", "cmd-b", "cmd-c"]:
+            (command_dest / f"{cmd}.md").write_text("existing")
+
+        mock_prompt = MagicMock(return_value=("overwrite_all", ""))
+
+        with patch("lola.targets.install.is_interactive", return_value=True), \
+             patch("lola.targets.install.prompt_command_conflict", mock_prompt):
+            installed, failed = _install_commands(
+                mock_target, module, local_module_path, str(tmp_path),
+            )
+
+        assert mock_prompt.call_count == 1
+        assert len(installed) == 3
+        assert len(failed) == 0
+
+    def test_commands_skip_then_overwrite_all(self, tmp_path):
+        module = self._create_module(tmp_path, commands=["cmd-a", "cmd-b", "cmd-c"])
+        local_module_path = tmp_path / "modules" / "testmod"
+        command_dest = tmp_path / "dest" / "commands"
+        command_dest.mkdir(parents=True)
+
+        mock_target = MagicMock()
+        mock_target.get_command_path.return_value = command_dest
+        mock_target.get_command_filename.side_effect = lambda mod, cmd: f"{cmd}.md"
+        mock_target.generate_command.return_value = True
+
+        for cmd in ["cmd-a", "cmd-b", "cmd-c"]:
+            (command_dest / f"{cmd}.md").write_text("existing")
+
+        mock_prompt = MagicMock(side_effect=[("skip", ""), ("overwrite_all", "")])
+
+        with patch("lola.targets.install.is_interactive", return_value=True), \
+             patch("lola.targets.install.prompt_command_conflict", mock_prompt):
+            installed, failed = _install_commands(
+                mock_target, module, local_module_path, str(tmp_path),
+            )
+
+        assert mock_prompt.call_count == 2
+        assert "cmd-a" in failed
+        assert "cmd-b" in installed
+        assert "cmd-c" in installed
+
+    def test_agents_overwrite_all_skips_subsequent_prompts(self, tmp_path):
+        module = self._create_module(tmp_path, agents=["agent-a", "agent-b", "agent-c"])
+        local_module_path = tmp_path / "modules" / "testmod"
+        agent_dest = tmp_path / "dest" / "agents"
+        agent_dest.mkdir(parents=True)
+
+        mock_target = MagicMock()
+        mock_target.supports_agents = True
+        mock_target.get_agent_path.return_value = agent_dest
+        mock_target.get_agent_filename.side_effect = lambda mod, agent: f"{agent}.md"
+        mock_target.generate_agent.return_value = True
+
+        for agent in ["agent-a", "agent-b", "agent-c"]:
+            (agent_dest / f"{agent}.md").write_text("existing")
+
+        mock_prompt = MagicMock(return_value=("overwrite_all", ""))
+
+        with patch("lola.targets.install.is_interactive", return_value=True), \
+             patch("lola.targets.install.prompt_agent_conflict", mock_prompt):
+            installed, failed = _install_agents(
+                mock_target, module, local_module_path, str(tmp_path),
+            )
+
+        assert mock_prompt.call_count == 1
+        assert len(installed) == 3
+        assert len(failed) == 0
+
+    def test_skills_overwrite_all_skips_subsequent_prompts(self, tmp_path):
+        module = self._create_module(tmp_path, skills=["skill-a", "skill-b", "skill-c"])
+        local_module_path = tmp_path / "modules" / "testmod"
+
+        mock_target = MagicMock()
+        mock_target.uses_managed_section = False
+        mock_target.get_skill_path.return_value = tmp_path / "dest" / "skills"
+        mock_target.generate_skill.return_value = True
+
+        mock_prompt = MagicMock(return_value=("overwrite_all", ""))
+
+        with patch("lola.targets.install._check_skill_exists", return_value=True), \
+             patch("lola.targets.install.is_interactive", return_value=True), \
+             patch("lola.targets.install.prompt_skill_conflict", mock_prompt):
+            installed, failed = _install_skills(
+                mock_target, module, local_module_path, str(tmp_path),
+            )
+
+        assert mock_prompt.call_count == 1
+        assert len(installed) == 3
+        assert len(failed) == 0

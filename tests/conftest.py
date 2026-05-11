@@ -505,6 +505,60 @@ def integration_module(tmp_path):
 
 
 @pytest.fixture
+def module_with_dependencies(tmp_path):
+    """Create a module with interdependent components."""
+    module_dir = tmp_path / "dep-module"
+    module_dir.mkdir()
+
+    # skill1 references skill2
+    skills_dir = module_dir / "skills"
+    skills_dir.mkdir()
+    skill1_dir = skills_dir / "skill1"
+    skill1_dir.mkdir()
+    (skill1_dir / "SKILL.md").write_text("""---
+description: Skill that uses skill2
+---
+
+# Skill 1
+
+This skill uses skill2 for advanced operations.
+
+Use the Skill tool to invoke skill2:
+
+<invoke name="Skill">
+<parameter name="skill">skill2</parameter>
+</invoke>
+""")
+
+    skill2_dir = skills_dir / "skill2"
+    skill2_dir.mkdir()
+    (skill2_dir / "SKILL.md").write_text("""---
+description: Base skill
+---
+
+# Skill 2
+
+Base skill with no dependencies.
+""")
+
+    # cmd1 references skill1
+    commands_dir = module_dir / "commands"
+    commands_dir.mkdir()
+    (commands_dir / "cmd1.md").write_text("""---
+description: Command that uses skill1
+---
+
+Run /cmd1 to invoke skill1:
+
+<invoke name="Skill">
+<parameter name="skill">skill1</parameter>
+</invoke>
+""")
+
+    return module_dir
+
+
+@pytest.fixture
 def integration_env(tmp_path, mock_lola_home, integration_module, cli_runner):
     """Full integration environment: module registered, project dir created.
 
