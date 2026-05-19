@@ -13,7 +13,6 @@ from rich.console import Console
 from rich.tree import Tree
 
 from lola.cli.completions import complete_module_names
-from lola.cli.context import CONTEXT_SETTINGS
 from lola.config import MCPS_FILE, MODULES_DIR, INSTALLED_FILE
 from lola.exceptions import (
     LolaError,
@@ -121,7 +120,7 @@ def _module_tree(
     console.print(tree)
 
 
-@click.group(name="mod", context_settings=CONTEXT_SETTINGS)
+@click.group(name="mod")
 def mod():
     """
     Manage lola modules.
@@ -169,7 +168,7 @@ def _confirm_overwrite(source: str, module_name: str | None) -> bool:
     return True
 
 
-@mod.command(name="add", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="add")
 @click.argument("source")
 @click.option(
     "-n", "--name", "module_name", default=None, help="Override the module name"
@@ -290,7 +289,7 @@ def add_module(source: str, module_name: str, module_content_dirname: str):
     console.print(f"  1. lola install {module.name} -a <assistant> -s <scope>")
 
 
-@mod.command(name="init", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="init")
 @click.argument("name", required=False, default=None)
 @click.option(
     "-s",
@@ -723,7 +722,7 @@ Edit files in `module/` (or `lola-module/`) to customize the content that gets i
         console.print(f"  {i}. {step}")
 
 
-@mod.command(name="rm", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="rm")
 @click.argument(
     "module_name", required=False, default=None, shell_complete=complete_module_names
 )
@@ -825,7 +824,7 @@ def remove_module(module_name: str | None, force: bool):
     console.print(f"[green]Removed {module_name}[/green]")
 
 
-@mod.command(name="ls", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="ls")
 @click.option("-v", "--verbose", is_flag=True, help="Show detailed module information")
 def list_modules(verbose: bool):
     """
@@ -873,7 +872,7 @@ def list_modules(verbose: bool):
         console.print()
 
 
-@mod.command(name="info", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="info")
 @click.argument(
     "module_name_or_path",
     required=False,
@@ -1068,7 +1067,7 @@ def module_info(module_name_or_path: str | None):
             console.print(f"  {err}")
 
 
-@mod.command(name="update", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="update")
 @click.argument(
     "module_name", required=False, default=None, shell_complete=complete_module_names
 )
@@ -1144,7 +1143,7 @@ def update_module_cmd(module_name: str | None):
             console.print("[dim]Run 'lola update' to regenerate assistant files[/dim]")
 
 
-@mod.command(name="search", context_settings=CONTEXT_SETTINGS)
+@mod.command(name="search")
 @click.argument("query")
 def mod_search(query: str):
     """

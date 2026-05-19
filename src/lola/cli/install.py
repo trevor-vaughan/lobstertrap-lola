@@ -13,7 +13,6 @@ import click
 from rich.console import Console
 
 from lola.cli.completions import complete_module_names, complete_installed_module_names
-from lola.cli.context import CONTEXT_SETTINGS
 from lola.config import MODULES_DIR, MARKET_DIR, CACHE_DIR
 from lola.exceptions import (
     ModuleInvalidError,
@@ -694,7 +693,7 @@ def _format_update_summary(result: UpdateResult) -> str:
     return f"({summary}){status_suffix}"
 
 
-@click.command(name="install", context_settings=CONTEXT_SETTINGS)
+@click.command(name="install")
 @click.argument(
     "module_name", required=False, default=None, shell_complete=complete_module_names
 )
@@ -961,7 +960,7 @@ def install_cmd(
     )
 
 
-@click.command(name="uninstall", context_settings=CONTEXT_SETTINGS)
+@click.command(name="uninstall")
 @click.argument(
     "module_name",
     required=False,
@@ -1245,7 +1244,7 @@ def uninstall_cmd(
     )
 
 
-@click.command(name="update", context_settings=CONTEXT_SETTINGS)
+@click.command(name="update")
 @click.argument(
     "module_name",
     required=False,
@@ -1364,7 +1363,7 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str], verbose: bo
     console.print("[green]Update complete[/green]")
 
 
-@click.command(name="list", context_settings=CONTEXT_SETTINGS)
+@click.command(name="list")
 @click.option(
     "-a",
     "--assistant",
