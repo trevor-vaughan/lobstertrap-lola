@@ -19,6 +19,7 @@ from lola.cli.mod import mod
 from lola.cli.sync import sync_cmd
 
 console = Console()
+CONTEXT_SETTINGS = {"help_option_names": ["--help", "-h"]}
 
 
 def ver():
@@ -26,7 +27,11 @@ def ver():
     console.print(f"lola {__version__}")
 
 
-@click.group(invoke_without_command=True, no_args_is_help=True)
+@click.group(
+    invoke_without_command=True,
+    no_args_is_help=True,
+    context_settings=CONTEXT_SETTINGS,
+)
 @click.option("-v", "--version", is_flag=True, help="Show version")
 @click.pass_context
 def main(ctx, version):
@@ -45,6 +50,7 @@ def main(ctx, version):
     \b
     For more help on any command:
         lola [command] --help
+        lola [command] -h
     """
     ctx.ensure_object(dict)
     if version:
