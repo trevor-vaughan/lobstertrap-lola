@@ -14,6 +14,13 @@ class TestMainCli:
         assert "lola - AI Skills Package Manager" in result.output
         assert "Quick start" in result.output
 
+    def test_help_short_flag(self, cli_runner):
+        """Show help text with -h."""
+        result = cli_runner.invoke(main, ["-h"])
+        assert result.exit_code == 0
+        assert "lola - AI Skills Package Manager" in result.output
+        assert "Quick start" in result.output
+
     def test_no_args_shows_help(self, cli_runner):
         """Show help when no arguments provided."""
         result = cli_runner.invoke(main, [])
@@ -41,6 +48,18 @@ class TestMainSubcommands:
         result = cli_runner.invoke(main, ["mod", "--help"])
         assert result.exit_code == 0
         assert "Manage lola modules" in result.output
+
+    def test_mod_subcommand_short_help(self, cli_runner):
+        """Show mod subcommand help with -h."""
+        result = cli_runner.invoke(main, ["mod", "-h"])
+        assert result.exit_code == 0
+        assert "Manage lola modules" in result.output
+
+    def test_nested_subcommand_short_help(self, cli_runner):
+        """Show nested command help with -h."""
+        result = cli_runner.invoke(main, ["mod", "add", "-h"])
+        assert result.exit_code == 0
+        assert "Add a module to the lola registry" in result.output
 
     def test_install_subcommand_help(self, cli_runner):
         """Show install subcommand help."""
