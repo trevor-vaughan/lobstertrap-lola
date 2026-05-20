@@ -20,7 +20,7 @@ my-skill/
 
 **Skill Pack** — multiple related skills grouped together:
 
-```
+```text
 my-skills/
   skills/
     skill-a/

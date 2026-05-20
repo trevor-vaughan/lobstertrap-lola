@@ -52,7 +52,7 @@ Agent Skills come in two forms:
 
 **Standalone** — a single skill following the [agentskills.io](https://agentskills.io/specification) standard:
 
-```
+```text
 my-skill/
   SKILL.md           # Required
   scripts/           # Optional
@@ -60,7 +60,7 @@ my-skill/
 
 **Skill Pack** — multiple related skills grouped together:
 
-```
+```text
 my-skills/
   skills/
     skill-a/
