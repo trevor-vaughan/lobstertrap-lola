@@ -99,7 +99,7 @@ See paired design document: `docs/dev-guide/design/go-migration.md`
 
 Migration phases:
 1. Freeze Python at `v0.x-python-final` tag
-2. Scaffold Go project structure (see ADR-0003)
+2. Scaffold Go project structure (see upcoming Go project scaffold ADR)
 3. Implement core commands with feature parity
 4. Integrate skillimage Go packages for OCI source handler
 5. Remove Python source after Go passes full test matrix
