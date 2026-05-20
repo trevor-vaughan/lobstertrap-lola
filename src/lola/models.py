@@ -544,30 +544,28 @@ class Marketplace:
                 raise ValueError(
                     f"Failed to clone marketplace repository: {result.stderr.strip()}"
                 )
-
-            # Locate the YAML file
-            if file_fragment:
-                yaml_file = (repo_dir / file_fragment).resolve()
-                # Guard against path traversal via fragment
-                if not str(yaml_file).startswith(str(repo_dir.resolve()) + os.sep) and yaml_file != repo_dir.resolve():
-                    raise ValueError(
-                        f"Path traversal detected in fragment: {file_fragment}"
-                    )
-                if not yaml_file.exists():
-                    raise ValueError(
-                        f"File '{file_fragment}' not found in repository"
-                    )
-            else:
-                yaml_file = cls._find_marketplace_yaml(repo_dir, name)
-
-            with open(yaml_file) as f:
-                data = yaml.safe_load(f) or {}
-
-            # Clean up .git before the temp dir context manager does it,
-            # to avoid issues with read-only git objects on some platforms.
-            git_dir = repo_dir / ".git"
-            if git_dir.exists():
-                shutil.rmtree(git_dir, ignore_errors=True)
+            try:
+                if file_fragment:
+                    yaml_file = (repo_dir / file_fragment).resolve()
+                    # Guard against path traversal via fragment
+                    if not str(yaml_file).startswith(str(repo_dir.resolve()) + os.sep) and yaml_file != repo_dir.resolve():
+                        raise ValueError(
+                            f"Path traversal detected in fragment: {file_fragment}"
+                        )
+                    if not yaml_file.exists():
+                        raise ValueError(
+                            f"File '{file_fragment}' not found in repository"
+                        )
+                else:
+                    yaml_file = cls._find_marketplace_yaml(repo_dir, name)
+                with open(yaml_file) as f:
+                    data = yaml.safe_load(f) or {}
+            finally:
+                # Clean up .git before the temp dir context manager does it,
+                # to avoid issues with read-only git objects on some platforms.
+                git_dir = repo_dir / ".git"
+                if git_dir.exists():
+                    shutil.rmtree(git_dir, ignore_errors=True)
 
         return cls(
             name=name,
