@@ -33,6 +33,7 @@ Migrate Lola from Python to Go.
 | [pterm/pterm](https://github.com/pterm/pterm) | TUI output | `github.com/pterm/pterm` | Tables, spinners, prompts, colored output — no stdlib equivalent |
 | [google/go-cmp](https://github.com/google/go-cmp) | Test struct diffing | `github.com/google/go-cmp/cmp` | Clear failure output for complex structs (test-only) |
 | [sigstore/sigstore-go](https://github.com/sigstore/sigstore-go) | Signature verification | `github.com/sigstore/sigstore-go` | Sigstore bundle verification (see ADR-0005) |
+| [redhat-et/skillimage](https://github.com/redhat-et/skillimage) | OCI skill images | `github.com/redhat-et/skillimage/pkg/...` | Pull, unpack, and validate OCI-based skill images; shared types with skillctl |
 
 **Stdlib usage** (no additional go.mod entries):
 
@@ -50,7 +51,7 @@ Frontmatter parsing is hand-rolled: split on `---`, unmarshal with the YAML libr
 
 **Release**: [GoReleaser](https://goreleaser.com/) for cross-compilation (linux/darwin/windows, amd64/arm64), GitHub releases with checksums, SBOM generation, and Homebrew/Scoop formula generation.
 
-**Coexistence strategy**: Python source (`src/lola/`) is tagged at `v1.x-python-final` and frozen. Go source grows in `cmd/`, `internal/`, `pkg/` within the same repository. CI runs both test suites during the transition. Python source is removed when Go reaches feature parity.
+**Coexistence strategy**: Python source (`src/lola/`) is tagged at `v0.x-python-final` and frozen. Go source grows in `cmd/`, `internal/`, `pkg/` within the same repository. CI runs both test suites during the transition. Python source is removed when Go reaches feature parity.
 
 **skillimage integration**: Lola imports [skillimage](https://github.com/redhat-et/skillimage) Go packages directly:
 - `pkg/oci` — pull, unpack, inspect OCI skill images
@@ -79,7 +80,7 @@ Frontmatter parsing is hand-rolled: split on `---`, unmarshal with the YAML libr
 
 ### Negative Consequences
 
-- Full rewrite of ~2500 LOC Python; temporary dual maintenance during coexistence
+- Full rewrite of ~9K LOC Python (~7.5K non-blank non-comment across 28 files); temporary dual maintenance during coexistence
 - Contributors must know Go (though Lola is straightforward CLI code)
 - `go-git/v5` has a heavy transitive dependency tree (~20 packages); accepted for single-binary benefit
 - Viper has a medium transitive tree; accepted for the config surface complexity it handles
@@ -97,7 +98,7 @@ Frontmatter parsing is hand-rolled: split on `---`, unmarshal with the YAML libr
 See paired design document: `docs/dev-guide/design/go-migration.md`
 
 Migration phases:
-1. Freeze Python at `v1.x-python-final` tag
+1. Freeze Python at `v0.x-python-final` tag
 2. Scaffold Go project structure (see ADR-0003)
 3. Implement core commands with feature parity
 4. Integrate skillimage Go packages for OCI source handler
