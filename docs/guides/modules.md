@@ -44,30 +44,32 @@ lola mod rm my-skills
 
 ## Module Structure
 
-Lola supports three module patterns:
+Lola supports two module types. See [Skills and Context Modules](../concepts/skills-and-modules.md) for full definitions.
 
-### Single Skill
+### Agent Skills
 
-Follows the [agentskills.io](https://agentskills.io/specification) standard:
+Agent Skills come in two forms:
 
-```
+**Standalone** — a single skill following the [agentskills.io](https://agentskills.io/specification) standard:
+
+```text
 my-skill/
   SKILL.md           # Required
   scripts/           # Optional
 ```
 
-### Skill Bundle
+**Skill Pack** — multiple related skills grouped together:
 
-Multiple related skills packaged together:
-
-```
-my-bundle/
+```text
+my-skills/
   skills/
-    skill-a/SKILL.md
-    skill-b/SKILL.md
+    skill-a/
+      SKILL.md
+    skill-b/
+      SKILL.md
 ```
 
-### AI Context Module (recommended)
+### AI Context Module (recommended for complete contexts)
 
 Complete module with instructions, skills, commands, and agents:
 

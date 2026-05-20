@@ -6,12 +6,27 @@ Lola distributes two types of AI context packages: **Agent Skills** and **AI Con
 
 An Agent Skill is a standalone context file following the [AgentSkills.io](https://agentskills.io/specification) standard. It is the fundamental unit of AI context - a markdown file (`SKILL.md`) with optional supporting assets that can be loaded by an agent on demand for In-Context Learning (ICL).
 
+Agent Skills come in two forms:
+
+**Standalone** — a single focused skill:
+
 ```
 my-skill/
   SKILL.md              # Required: skill definition
   scripts/              # Optional: executable scripts
   reference/            # Optional: documentation
   assets/               # Optional: other supporting files
+```
+
+**Skill Pack** — multiple related skills grouped together:
+
+```text
+my-skills/
+  skills/
+    skill-a/
+      SKILL.md
+    skill-b/
+      SKILL.md
 ```
 
 A skill injects context into the LLM's runtime memory, guiding it to return more precise results. It translates your workflows and knowledge into transferable instructions an agent can execute.
@@ -46,10 +61,10 @@ AI Context Modules also solve the problem where a developer wants to integrate t
 
 | | Agent Skill | AI Context Module |
 |---|---|---|
-| **Use case** | Single focused capability | Complete agent context |
-| **Contents** | SKILL.md + optional assets | Multiple skills + AGENTS.md + commands + MCP |
+| **Use case** | Single focused capability (standalone or skill pack) | Complete agent context |
+| **Contents** | SKILL.md + optional assets; or `skills/` directory with multiple skills | Multiple skills + AGENTS.md + commands + MCP |
 | **Standard** | [AgentSkills.io](https://agentskills.io/specification) | Lola extension of the standard |
-| **Example** | A code review skill | A full DevSecOps module with review, security, and compliance skills |
+| **Example** | A code review skill, or a pack of review + lint + test skills | A full DevSecOps module with review, security, and compliance skills |
 | **Init** | Manual or future `lola skill init` | `lola mod init` |
 
 See [Installing Modules](../guides/modules.md) for more details.
