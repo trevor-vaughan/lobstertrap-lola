@@ -466,7 +466,7 @@ class Marketplace:
 
         from urllib.parse import urlparse
 
-        # Git-based fetch: git+https:// or git+ssh://
+        # Git-based fetch: git+https://, git+ssh://, SCP-style, or .git-suffixed URLs
         # Uses git clone to leverage existing credentials (SSH keys, credential
         # helpers, .netrc) — required for self-hosted GitLab/GitHub instances
         # that don't allow unauthenticated HTTP access.
@@ -475,6 +475,11 @@ class Marketplace:
 
         parsed = urlparse(url)
         stored_url = url
+
+        # Auto-detect .git-suffixed HTTPS/HTTP URLs as git sources
+        # (e.g. https://github.com/org/marketplace.git)
+        if parsed.scheme in ("http", "https") and parsed.path.rstrip("/").endswith(".git"):
+            return cls._from_git_url(url, name)
 
         if parsed.scheme in ("http", "https"):
             try:
@@ -519,6 +524,7 @@ class Marketplace:
             git+ssh://git@gitlab.internal/org/marketplace.git
             git+https://gitlab.internal/org/marketplace.git#path/to/market.yml
             git@gitlab.internal:org/marketplace.git (SCP-style)
+            https://github.com/org/marketplace.git (auto-detected by .git suffix)
 
         The optional fragment (#path/to/file.yml) specifies which file in the
         repo contains the marketplace catalog. Without it, auto-detection is

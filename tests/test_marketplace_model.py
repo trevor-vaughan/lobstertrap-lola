@@ -264,6 +264,18 @@ class TestMarketplaceFromGitUrl:
         assert marketplace.version == "1.0.0"
         assert len(marketplace.modules) == 1
 
+    def test_from_git_url_https_dot_git_suffix(self):
+        """Auto-detect HTTPS URL ending in .git as a git source."""
+        with patch("subprocess.run", side_effect=self._mock_git_clone(self.YAML_CONTENT)):
+            marketplace = Marketplace.from_url(
+                "https://github.com/org/marketplace.git", "my-market"
+            )
+        assert marketplace.name == "my-market"
+        assert marketplace.url == "https://github.com/org/marketplace.git"
+        assert marketplace.description == "Self-hosted catalog"
+        assert marketplace.version == "1.0.0"
+        assert len(marketplace.modules) == 1
+
     def test_from_git_url_with_fragment(self):
         """Use fragment to specify YAML file path in the repo."""
         with patch(
