@@ -81,6 +81,13 @@ Frontmatter parsing is hand-rolled: split on `---`, unmarshal with the YAML libr
 
 ### Negative Consequences
 
+!!! warning "PyPI Distribution Migration"
+    Once the Go binary reaches parity, the Python version of Lola will no longer be
+    maintained. The Python CLI will print a deprecation warning at startup, e.g.:
+    `[DEPRECATION WARNING]: Lola has migrated to Go. This Python version is no longer
+    maintained. Please migrate to the Go binary:
+    https://lobstertrap.org/lola/getting-started/installation/`
+
 - Full rewrite of ~9K LOC Python (~7.5K non-blank non-comment across 28 files); temporary dual maintenance during coexistence
 - Contributors must know Go (though Lola is straightforward CLI code)
 - `go-git/v5` has a heavy transitive dependency tree (~20 packages); accepted for single-binary benefit

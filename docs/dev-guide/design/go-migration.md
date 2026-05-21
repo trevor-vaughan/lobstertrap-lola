@@ -2,6 +2,16 @@
 
 Paired with [ADR-0002: Go Migration](../../adr/0002-go-migration.md).
 
+!!! note "Goal"
+    The primary goal of this migration is **full 1:1 parity with the current Python CLI**.
+    The guiding rule is: do not break the user experience — flag names, commands, and
+    behavior must remain identical to the Python version until parity is reached. Some
+    Q3 new commands (Skill, Group) are included here to capture and align future
+    direction alongside the migration, but they are clearly annotated as additions beyond
+    parity. Further improvement ideas — flag renames, UX enhancements — are tracked in
+    the [Post-Parity Improvements](#post-parity-improvements) section for the next
+    design cycle.
+
 ## Migration Timeline
 
 ```mermaid
@@ -32,7 +42,7 @@ gantt
 
 During the transition, both Python and Go source live in the same repository:
 
-```
+```text
 lola/
 ├── src/lola/              # ACTIVE during migration — frozen at v0.x-python-final once Go reaches parity
 ├── cmd/lola/main.go       # NEW — Go entry point
@@ -73,7 +83,7 @@ func NewRootCmd() *cobra.Command {
         // New commands — target: Q3 start (2026-08)
         NewSkillCmd(),  // lola skill — standalone skill management
         NewGroupCmd(),  // lola group — group install (dnf group-style bundles)
-        NewServeCmd(),  // lola serve — REST API and local repo server (gin-gonic)
+        // NewServeCmd() — deferred post-parity; needs dedicated design doc
     )
     return root
 }
@@ -125,14 +135,22 @@ func ParseFrontmatter(content []byte, v any) (body []byte, err error) {
 
 ## Python Feature Parity Checklist
 
+!!! note "Scope"
+    The primary goal of this checklist is 1:1 parity with the current Python CLI — flag
+    names, behavior, and output are kept identical to avoid breaking existing users.
+    Improvements such as flag renames (`--module-content` → `--content-path`,
+    `--workspace` → `--install-root`) and UX enhancements are out of scope here and will
+    be addressed in a follow-up design cycle once parity is reached. New commands planned
+    for Q3 (Skill, Group) are included and clearly annotated as additions beyond parity.
+
 Before removing Python source, the Go binary must pass:
 
 **Commands**
 
-- [ ] `lola mod add <source>` — git, zip, tar, folder, URL variants; `--module-content` flag
+- [ ] `lola mod add <source>` — git, zip, tar, folder, URL variants; `--module-content` flag (alias: `--content-path`)
 - [ ] `lola mod rm [-f]`, `lola mod ls`, `lola mod info [-v]`, `lola mod update`
 - [ ] `lola mod init` — with `--no-skill`, `--no-command`, `--no-agent`, `--no-mcps`, `--no-instructions`, `--force`
-- [ ] `lola mod search <query>` — across all enabled repos
+- [ ] `lola mod search <query>` — implement as a filtered view of a global search engine (repos only, matching current Python behavior); global search without filter is the foundation for universal search post-parity
 - [ ] `lola install [MODULE] [-a ASSISTANT] [-f] [-v] [--scope project|user] [--append-context PATH] [--pre-install SCRIPT] [--post-install SCRIPT] [--workspace NAME] [PROJECT_PATH]`
 - [ ] `lola uninstall <module> [-a ASSISTANT] [--scope project|user] [-v] [PROJECT_PATH]`
 - [ ] `lola update [MODULE] [-a ASSISTANT] [-v]` — with orphan detection and removal for skills, commands, agents, and MCPs
@@ -160,7 +178,7 @@ Before removing Python source, the Go binary must pass:
 
 **Install behaviour**
 
-- [ ] Pre/post install hook execution (`lola.yaml` hooks and `--pre-install` / `--post-install` overrides)
+- [ ] Pre/post install hook execution — detect both `lola.yml` and `lola.yaml`; honour `--pre-install` / `--post-install` overrides
 - [ ] Interactive prompts: overwrite confirmation, multi-repo conflict picker (when module exists in more than one enabled repo)
 - [ ] Skill name conflict resolution: when two installed modules share a skill name, the second is installed with a `<module>.<skill>` prefix to avoid overwriting the first
 - [ ] Backwards-compatible uninstall: also removes old prefixed filenames (`<module>.<cmd>.md`, `<module>.<agent>.md`) left by installs made before the prefix was removed
@@ -168,9 +186,20 @@ Before removing Python source, the Go binary must pass:
 
 **Sync**
 
-- [ ] `.lola-req` parsing with PEP 440 version specifiers (`>=`, `~=` tilde, `^` caret, semver ranges)
+- [ ] `.lola-req` parsing with [Version Specifiers](https://packaging.python.org/en/latest/specifications/version-specifiers/#version-specifiers) standard operators (`~=`, `==`, `!=`, `>=`, `<=`, `>`, `<`, `===`)
+- [ ] `.lola-req` Lola-specific extensions: `~` tilde and `^` caret (converted to standard operators at parse time)
 - [ ] `--dry-run` mode
 
 **Data integrity**
 
 - [ ] Installation registry persisted as YAML with atomic writes (write to temp file, rename)
+
+## Post-Parity Improvements
+
+Ideas raised during review to be addressed in the first Go improvement cycle after parity is reached. Not in scope for the 1:1 migration.
+
+- **`--module-content` → `--content-path`**: Rename for clarity — reads as "fetch this source, load content from this subpath." During parity, implement both names in Cobra pointing to the same behaviour (`--module-content` as the parity alias, `--content-path` as the new name). No refactor needed post-parity.
+- **`--workspace` (OpenClaw-specific)**: Remains tied to the OpenClaw target — not a global flag. Post-parity: expand workspace capabilities within the OpenClaw target extension.
+- **Skill conflict resolution UX**: Current behavior silently prefixes conflicting skill names. Future improvement: prompt the user, support a `--prefix` flag, or allow `prefix:` configuration in `lola.yaml`.
+- **Universal `mod search`**: Expose the global search engine without filters so users can search across both the local module registry and all enabled repos in a single command. The foundation is already built during parity (see checklist).
+- **`lola serve`**: HTTP router for REST API and local repo serving (gin-gonic). Needs a dedicated design doc before implementation.
