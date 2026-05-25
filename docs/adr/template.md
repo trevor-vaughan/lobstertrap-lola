@@ -1,7 +1,8 @@
 # ADR: [Title]
 
-**Status**: [Proposed | Accepted | Deprecated | Superseded]
+**Status**: [Proposed | Accepted | Deprecated]
 **Date**: YYYY-MM-DD
+**Last Updated**: YYYY-MM-DD
 **Authors**: [Author names]
 **Reviewers**: [Reviewer names]
 

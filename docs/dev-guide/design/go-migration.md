@@ -80,6 +80,8 @@ func NewRootCmd() *cobra.Command {
         NewRepoCmd(),        // lola repo (renamed from market)
         NewCompletionsCmd(), // lola completions bash/zsh/fish
 
+        NewSearchCmd(),  // lola search [--mod|--market] — unified search; lola mod search aliases --mod
+
         // New commands — target: Q3 start (2026-08)
         NewSkillCmd(),  // lola skill — standalone skill management
         NewGroupCmd(),  // lola group — group install (dnf group-style bundles)
@@ -150,7 +152,8 @@ Before removing Python source, the Go binary must pass:
 - [ ] `lola mod add <source>` — git, zip, tar, folder, URL variants; `--module-content` flag (alias: `--content-path`)
 - [ ] `lola mod rm [-f]`, `lola mod ls`, `lola mod info [-v]`, `lola mod update`
 - [ ] `lola mod init` — with `--no-skill`, `--no-command`, `--no-agent`, `--no-mcps`, `--no-instructions`, `--force`
-- [ ] `lola mod search <query>` — implement as a filtered view of a global search engine (repos only, matching current Python behavior); global search without filter is the foundation for universal search post-parity
+- [ ] `lola search <query>` — unified search across the local module registry and enabled marketplace catalogs; `--mod` to scope to module registry only, `--market` to scope to marketplace catalogs only
+- [ ] `lola mod search <query>` — backwards-compat alias for `lola search --mod` (searches local module registry)
 - [ ] `lola install [MODULE] [-a ASSISTANT] [-f] [-v] [--scope project|user] [--append-context PATH] [--pre-install SCRIPT] [--post-install SCRIPT] [--workspace NAME] [PROJECT_PATH]`
 - [ ] `lola uninstall <module> [-a ASSISTANT] [--scope project|user] [-v] [PROJECT_PATH]`
 - [ ] `lola update [MODULE] [-a ASSISTANT] [-v]` — with orphan detection and removal for skills, commands, agents, and MCPs
@@ -201,5 +204,5 @@ Ideas raised during review to be addressed in the first Go improvement cycle aft
 - **`--module-content` → `--content-path`**: Rename for clarity — reads as "fetch this source, load content from this subpath." During parity, implement both names in Cobra pointing to the same behaviour (`--module-content` as the parity alias, `--content-path` as the new name). No refactor needed post-parity.
 - **`--workspace` (OpenClaw-specific)**: Remains tied to the OpenClaw target — not a global flag. Post-parity: expand workspace capabilities within the OpenClaw target extension.
 - **Skill conflict resolution UX**: Current behavior silently prefixes conflicting skill names. Future improvement: prompt the user, support a `--prefix` flag, or allow `prefix:` configuration in `lola.yaml`.
-- **Universal `mod search`**: Expose the global search engine without filters so users can search across both the local module registry and all enabled repos in a single command. The foundation is already built during parity (see checklist).
+- **`lola search` UX refinement**: The `--mod` / `--market` flag naming and any further search scoping improvements based on community feedback once `lola search` ships.
 - **`lola serve`**: HTTP router for REST API and local repo serving (gin-gonic). Needs a dedicated design doc before implementation.
