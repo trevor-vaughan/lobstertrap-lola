@@ -5,25 +5,17 @@ contributors may hold, how decisions are made, and how to participate in the pro
 
 ## Roles
 
-### Lead
-
-The project Lead sets the overall direction of Lola, has the final tie-break on
-decisions where consensus cannot be reached, and holds Core Maintainer rights.
-
-| Name | GitHub |
-|------|--------|
-| Igor Brandao | [@mrbrandao](https://github.com/mrbrandao) |
-
 ### Core Maintainer
 
 Core Maintainers have full merge rights across the project, participate in all
 governance decisions, and are responsible for nominating new Maintainers and Core
-Maintainers.
+Maintainers. When consensus cannot be reached, the Founding Architect holds the
+tiebreak vote.
 
-| Name | GitHub |
-|------|--------|
-| Igor Brandao | [@mrbrandao](https://github.com/mrbrandao) |
-| Katie Mulliken | [@SecKatie](https://github.com/SecKatie) |
+| Name | Role |
+|------|------|
+| [@mrbrandao](https://github.com/mrbrandao) via [Matrix](https://matrix.to/#/@mrbrandao:matrix.org) | Founding Architect |
+| [@SecKatie](https://github.com/SecKatie) via [Matrix](https://matrix.to/#/@katie:glitches.chat) | Co-Architect |
 
 ### Maintainer
 
@@ -44,26 +36,27 @@ Maintainers over time.
 The project has a lightweight contributor ladder:
 
 ```text
-Contributor → Maintainer → Core Maintainer → Lead
+Contributor → Maintainer → Core Maintainer
 ```
 
 Advancement is invitation-based — a Core Maintainer nominates a candidate based on
 sustained, quality contributions over time. There is no hard commit count; what matters
 is the quality and consistency of contributions and alignment with the project's goals.
 
-Nominations are approved by lazy consensus among Core Maintainers (see
-[Decision-Making](#decision-making)).
+Nominations are approved by [lazy consensus](https://community.apache.org/committers/lazyConsensus.html)
+among Core Maintainers (see [Decision-Making](#decision-making)).
 
 ## Decision-Making
 
 Day-to-day decisions (PR merges, bug fixes, documentation, dependency updates) use
-**lazy consensus**: a Maintainer or Core Maintainer approves the change, and if no
-objection is raised within 48 hours, the change lands.
+**[lazy consensus](https://community.apache.org/committers/lazyConsensus.html)**:
+a Maintainer or Core Maintainer approves the change, and if no objection is raised
+within 2 business days, the change lands.
 
 Significant decisions (architectural changes, breaking changes, new major features,
 adding or removing Maintainers or Core Maintainers) are discussed openly in GitHub
-Issues or Discussions. If consensus cannot be reached, the Lead has the final
-tie-break.
+Issues or Discussions. If consensus cannot be reached, the Founding Architect holds
+the final tiebreak vote.
 
 ## Pull Requests
 
@@ -82,14 +75,16 @@ may be cut at any time when a critical fix is needed.
 This project follows the
 [Contributor Covenant Code of Conduct v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
 Violations may be reported to the Core Maintainers via a GitHub Discussion marked
-private, or by contacting the Lead directly.
+private, or by contacting a Core Maintainer directly:
+[@mrbrandao](https://github.com/mrbrandao) via [Matrix](https://matrix.to/#/@mrbrandao:matrix.org)
+or [@SecKatie](https://github.com/SecKatie) via [Matrix](https://matrix.to/#/@katie:glitches.chat).
 
 ## Communication
 
 Project discussions happen openly in
 [GitHub Issues](https://github.com/LobsterTrap/lola/issues) and
 [GitHub Discussions](https://github.com/LobsterTrap/lola/discussions).
-A community channel is planned and will be linked here once available.
+Join us on Matrix: [#lola-ai:matrix.org](https://matrix.to/#/#lola-ai:matrix.org)
 
 ## Amendments
 

@@ -424,6 +424,10 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 Lola is governed by its maintainers. See [GOVERNANCE.md](GOVERNANCE.md) for the project's roles, decision-making process, and release cadence.
 
+## Community
+
+Join the community on Matrix: [#lola-ai:matrix.org](https://matrix.to/#/#lola-ai:matrix.org)
+
 ## License
 
 [GPL-2.0-or-later](https://spdx.org/licenses/GPL-2.0-or-later.html)
