@@ -1,32 +1,28 @@
 # Architecture Decision Records
 
 We use ADRs to document significant architectural decisions for the Lola project.
-ADRs are managed with [adr-tools](https://github.com/npryce/adr-tools).
+See [use-adrs.md](use-adrs.md) for the full convention, naming rules, and how
+to create, update, and deprecate ADRs.
 
-## Quick Commands
+## Quick Start
 
 ```bash
-# Create a new ADR
-make adr-new use-mkdocs-for-documentation
-
-# List existing ADRs
-make adr-list
-
-# Show help
-make adr-help
+make adr-new topic-name
 ```
 
-## ADR Status
+This copies the template to `docs/adr/topic-name.md`. Fill in the sections and
+open a pull request.
+
+## ADR Statuses
 
 | Status | Meaning |
 |--------|---------|
 | **Proposed** | Under discussion, not yet accepted |
 | **Accepted** | Approved and in effect |
 | **Deprecated** | No longer relevant |
-| **Superseded** | Replaced by a newer ADR |
 
-## Writing ADRs
+## Template Changes
 
-Use the [template](template.md) as a starting point. ADRs should be written
-before implementing significant changes to ensure decisions are documented
-and reviewed.
+If the template needs to change, describe what changed and why here in this file,
+apply the change to `template.md`, and open a pull request for Core Maintainer
+approval.

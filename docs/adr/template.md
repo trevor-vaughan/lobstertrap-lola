@@ -1,7 +1,8 @@
-# ADR-XXX: [Title]
+# ADR: [Title]
 
-**Status**: [Proposed | Accepted | Deprecated | Superseded]
+**Status**: [Proposed | Accepted | Deprecated]
 **Date**: YYYY-MM-DD
+**Last Updated**: YYYY-MM-DD
 **Authors**: [Author names]
 **Reviewers**: [Reviewer names]
 
@@ -47,10 +48,3 @@ considerations.
 ## References
 
 - [Link to related issues, discussions, or documentation]
-
----
-
-**Template Usage Notes:**
-- Replace XXX with sequential ADR number (001, 002, etc.)
-- Remove template usage notes before publishing
-- Use `make adr-new title` to create new ADRs from this template
