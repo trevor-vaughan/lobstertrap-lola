@@ -416,6 +416,10 @@ Commands are automatically converted to each assistant's format:
 
 This project follows the [Contributor Covenant Code of Conduct v2.1](CODE_OF_CONDUCT.md).
 
+## Security
+
+For reporting vulnerabilities, see [SECURITY.md](SECURITY.md).
+
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
