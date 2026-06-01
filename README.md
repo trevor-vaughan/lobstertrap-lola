@@ -434,7 +434,7 @@ Join the community on Matrix: [#lola-ai:matrix.org](https://matrix.to/#/#lola-ai
 
 ## License
 
-[GPL-2.0-or-later](https://spdx.org/licenses/GPL-2.0-or-later.html)
+[Apache-2.0](https://spdx.org/licenses/Apache-2.0.html)
 
 ## Authors
 

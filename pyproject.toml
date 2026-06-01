@@ -7,6 +7,7 @@ name = "lola-ai"
 dynamic = ["version"]
 description = "AI Skills Package Manager"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.13"
 authors = [
     {name = "Igor Brandao"},

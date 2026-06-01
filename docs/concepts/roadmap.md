@@ -6,7 +6,7 @@
 - Marketplace for skill discovery and distribution
 - Declarative module management with `.lola-req`
 - Install hooks for bootstrapping agents
-- Open source under GPL-2.0
+- Open source under Apache-2.0
 
 ## Vision
 

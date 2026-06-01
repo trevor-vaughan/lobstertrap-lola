@@ -295,7 +295,7 @@ https://docs.github.com/en/authentication/connecting-to-github-with-ssh
   architecture overview
 - **[README.md](README.md)**: Project overview and installation
   instructions
-- **[LICENSE](LICENSE)**: GPL-2.0-or-later license
+- **[LICENSE](LICENSE)**: Apache-2.0 license
 - **[GitHub Contributing Guide]
   (https://opensource.guide/how-to-contribute/)**: General
   open-source contribution guidance
