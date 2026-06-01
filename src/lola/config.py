@@ -5,7 +5,6 @@ config:
 
 from pathlib import Path
 import os
-from platformdirs import PlatformDirs
 
 # Base lola directory
 LOLA_HOME = Path(os.environ.get("LOLA_HOME", Path.home() / ".lola"))
@@ -26,16 +25,16 @@ SKILL_FILE = "SKILL.md"
 # MCP servers definition filename
 MCPS_FILE = "mcps.json"
 
-# Platform-specific directories for user-scope installations
-_PLATFORM_DIRS = PlatformDirs("opencode", appauthor=False)
-
 
 def get_user_config_dir() -> Path:
-    """Get user configuration directory for OpenCode using platform conventions.
+    """Get the user-scope config directory for OpenCode.
 
-    Returns platform-appropriate app-specific config directory:
-    - Linux/Unix: ~/.config/opencode
-    - macOS: ~/Library/Application Support/opencode
-    - Windows: %APPDATA%/opencode
+    OpenCode resolves its global config from ``$XDG_CONFIG_HOME/opencode``
+    when ``XDG_CONFIG_HOME`` is set, otherwise ``~/.config/opencode`` — on
+    every platform (Linux, macOS, Windows). It does not use platform-specific
+    locations such as ``~/Library/Application Support`` on macOS, so neither
+    do we.
     """
-    return Path(_PLATFORM_DIRS.user_config_dir)
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+    return base / "opencode"
