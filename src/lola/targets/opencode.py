@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
-import shutil
+from lola import config
 
-import lola.config as config
 from .base import (
     BaseAssistantTarget,
     ManagedInstructionsTarget,
     _generate_agent_with_frontmatter,
     _generate_passthrough_command,
+    _inject_preamble,
 )
-
 
 # =============================================================================
 # OpenCode-specific MCP helpers
@@ -36,12 +36,16 @@ def _transform_mcp_to_opencode(server_config: dict[str, Any]) -> dict[str, Any]:
     """Transform Lola MCP config to OpenCode format.
 
     Local (stdio):
-        Input:  {"command": "uv", "args": ["run", "..."], "env": {"VAR": "${VAR}"}}
-        Output: {"type": "local", "command": ["uv", "run", "..."], "environment": {"VAR": "{env:VAR}"}}
+        Input:  {"command": "uv", "args": ["run", "..."],
+                 "env": {"VAR": "${VAR}"}}
+        Output: {"type": "local", "command": ["uv", "run", "..."],
+                 "environment": {"VAR": "{env:VAR}"}}
 
     Remote (http/sse):
-        Input:  {"type": "http", "url": "https://...", "headers": {"Authorization": "Bearer ${TOKEN}"}}
-        Output: {"type": "remote", "url": "https://...", "headers": {...}}  # OpenCode uses "remote"
+        Input:  {"type": "http", "url": "https://...",
+                 "headers": {"Authorization": "Bearer ${TOKEN}"}}
+        Output: {"type": "remote", "url": "https://...",
+                 "headers": {...}}  # OpenCode uses "remote"
     """
     server_type = server_config.get("type")
     if server_type in REMOTE_MCP_TYPES:
@@ -150,7 +154,7 @@ def _remove_mcps_from_opencode_file(
         existing_config["mcp"].pop(name, None)
 
     # Write back (or delete if mcp is empty and only $schema remains)
-    remaining_keys = {k for k in existing_config.keys() if k != "$schema"}
+    remaining_keys = {k for k in existing_config if k != "$schema"}
     if not existing_config["mcp"] and remaining_keys == {"mcp"}:
         dest_path.unlink()
     else:
@@ -175,6 +179,12 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
     name = "opencode"
     supports_agents = True
     INSTRUCTIONS_FILE = "AGENTS.md"
+
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Return module content tree install path."""
+        if scope == "user":
+            return config.get_user_config_dir() / "modules"
+        return Path(project_path) / ".opencode" / "modules"
 
     def get_skill_path(self, project_path: str, scope: str = "project") -> Path:
         if scope == "user":
@@ -207,6 +217,8 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
         dest_path: Path,
         skill_name: str,
         project_path: str | None = None,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Copy skill directory with SKILL.md and supporting files.
 
@@ -224,8 +236,9 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
         skill_dest = dest_path / skill_name
         skill_dest.mkdir(parents=True, exist_ok=True)
 
-        # Copy SKILL.md
-        shutil.copy2(skill_file, skill_dest / config.SKILL_FILE)
+        # Copy SKILL.md with optional preamble injection
+        content = _inject_preamble(skill_file.read_text(), module_dir)
+        (skill_dest / config.SKILL_FILE).write_text(content)
 
         # Copy supporting files (scripts, references, assets, etc.)
         for item in source_path.iterdir():
@@ -246,9 +259,16 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
         dest_dir: Path,
         cmd_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         filename = self.get_command_filename(module_name, cmd_name)
-        return _generate_passthrough_command(source_path, dest_dir, filename)
+        return _generate_passthrough_command(
+            source_path,
+            dest_dir,
+            filename,
+            module_dir=module_dir,
+        )
 
     def generate_agent(
         self,
@@ -256,6 +276,8 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
         dest_dir: Path,
         agent_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         filename = self.get_agent_filename(module_name, agent_name)
         return _generate_agent_with_frontmatter(
@@ -263,6 +285,7 @@ class OpenCodeTarget(ManagedInstructionsTarget, BaseAssistantTarget):
             dest_dir,
             filename,
             {"mode": "subagent"},
+            module_dir=module_dir,
         )
 
     def remove_command(self, dest_dir: Path, cmd_name: str, module_name: str) -> bool:

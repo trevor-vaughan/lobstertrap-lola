@@ -24,6 +24,8 @@ my-module/
     mcps.json           # MCP settings
 ```
 
+You can add any additional directories alongside the standard ones (e.g., `packs/`, `templates/`, `reference/`). During installation, the entire module content tree is copied to the target assistant's `modules/<name>/` directory, preserving all internal relative paths.
+
 !!! note
     `lola mod init` currently creates only the AI Context Module pattern. Standalone Agent Skill initialization (`lola skill init`) is planned for a future release.
 
@@ -78,6 +80,47 @@ Review PR #$ARGUMENTS and provide feedback.
 ```
 
 Use `$ARGUMENTS` for all args or `$1`, `$2` for positional. Lola automatically converts commands to each assistant's native format (markdown for Claude Code and Cursor, TOML for Gemini CLI).
+
+## Add shared resources for agents
+
+Modules often include shared resources that agents need at runtime -- convention packs, reference documents, templates, or protocol files. Place these in any directory at the module content root:
+
+```text
+my-module/
+  module/
+    agents/
+      reviewer.md
+    packs/                # Shared resources for agents
+      conventions.md
+      severity.md
+    skills/
+      my-skill/
+        SKILL.md
+```
+
+During installation, the full content tree is copied to the target's modules directory (e.g., `.claude/modules/my-module/`). Generated skill, command, and agent files receive a plain-text module directory preamble between the frontmatter and body, pointing to the installed module tree (Gemini CLI commands use TOML format and do not receive the preamble). Agents can read this path to locate module-relative resources:
+
+```markdown
+---
+name: reviewer
+model: inherit
+---
+Module root: .claude/modules/my-module
+This is the installed root of the module. Resolve all relative file references in this document against the path above.
+Example: packs/foo.md -> .claude/modules/my-module/packs/foo.md
+
+Read `conventions.md` from the packs directory.
+```
+
+The module tree is installed per-target at:
+
+| Target      | Project Scope               | User Scope                              |
+|-------------|-----------------------------|-----------------------------------------|
+| Claude Code | `.claude/modules/<name>/`   | `~/.claude/modules/<name>/`             |
+| Cursor      | `.cursor/modules/<name>/`   | `~/.cursor/modules/<name>/`             |
+| Gemini CLI  | `.gemini/modules/<name>/`   | `~/.gemini/modules/<name>/`             |
+| OpenClaw    | `modules/<name>/`           | `~/.openclaw/workspace/modules/<name>/` |
+| OpenCode    | `.opencode/modules/<name>/` | `~/.config/opencode/modules/<name>/`    |
 
 ## Register and install
 

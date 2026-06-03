@@ -30,6 +30,9 @@ def isolated_lola_home(monkeypatch, tmp_path):
     monkeypatch.setattr("lola.utils.LOLA_HOME", lola_home)
     monkeypatch.setattr("lola.utils.MODULES_DIR", lola_home / "modules")
 
+    # Ensure CWD is writable so user-scope local module copy succeeds
+    monkeypatch.chdir(tmp_path)
+
     return lola_home
 
 

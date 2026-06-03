@@ -5,6 +5,12 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
+from lola.cli.install import (
+    install_cmd,
+    list_installed_cmd,
+    uninstall_cmd,
+    update_cmd,
+)
 from lola.models import Installation, InstallationRegistry, Module
 from lola.targets import (
     ClaudeCodeTarget,
@@ -13,7 +19,7 @@ from lola.targets import (
     OpenCodeTarget,
 )
 from lola.targets.base import _resolve_source_content
-
+from lola.targets.install import _install_instructions
 
 # =============================================================================
 # Module Model Tests
@@ -479,8 +485,6 @@ class TestInstallWithInstructions:
 
     def test_install_with_instructions(self, tmp_path):
         """Install command includes instructions in summary."""
-        from lola.cli.install import install_cmd
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -503,7 +507,8 @@ class TestInstallWithInstructions:
             patch("lola.config.INSTALLED_FILE", installed_file),
         ):
             result = runner.invoke(
-                install_cmd, ["test-module", "-a", "claude-code", str(project_dir)]
+                install_cmd,
+                ["test-module", "-a", "claude-code", str(project_dir)],
             )
 
         assert result.exit_code == 0
@@ -515,8 +520,6 @@ class TestUninstallWithInstructions:
 
     def test_uninstall_removes_instructions(self, tmp_path):
         """Uninstall command removes instructions files."""
-        from lola.cli.install import uninstall_cmd
-
         installed_file = tmp_path / ".lola" / "installed.yml"
         installed_file.parent.mkdir(parents=True)
 
@@ -546,7 +549,7 @@ class TestUninstallWithInstructions:
             "<!-- lola:module:test-module:start -->\n"
             "# Test Module\n"
             "<!-- lola:module:test-module:end -->\n"
-            "<!-- lola:instructions:end -->\n"
+            "<!-- lola:instructions:end -->\n",
         )
 
         # Create mock target
@@ -555,6 +558,7 @@ class TestUninstallWithInstructions:
         mock_target.get_skill_path.return_value = project_dir / ".claude" / "skills"
         mock_target.get_command_path.return_value = project_dir / ".claude" / "commands"
         mock_target.get_agent_path.return_value = project_dir / ".claude" / "agents"
+        mock_target.get_module_path.return_value = project_dir / ".claude" / "modules"
         mock_target.get_instructions_path.return_value = claude_md
         mock_target.remove_skill.return_value = True
         mock_target.remove_instructions.return_value = True
@@ -576,8 +580,6 @@ class TestUpdateWithInstructions:
 
     def test_update_regenerates_instructions(self, tmp_path):
         """Update command regenerates instructions."""
-        from lola.cli.install import update_cmd
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -626,6 +628,7 @@ class TestUpdateWithInstructions:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_agent_path.return_value = agent_dest
+        mock_target.get_module_path.return_value = project_dir / ".claude" / "modules"
         mock_target.get_instructions_path.return_value = project_dir / "CLAUDE.md"
         mock_target.remove_skill.return_value = True
         mock_target.generate_skill.return_value = True
@@ -639,7 +642,8 @@ class TestUpdateWithInstructions:
             patch("lola.cli.install.ensure_lola_dirs"),
             patch("lola.cli.install.get_registry", return_value=registry),
             patch(
-                "lola.cli.install.get_local_modules_path", return_value=local_modules
+                "lola.cli.install.get_local_modules_path",
+                return_value=local_modules,
             ),
             patch("lola.cli.install.get_target", return_value=mock_target),
         ):
@@ -651,8 +655,6 @@ class TestUpdateWithInstructions:
 
     def test_update_installs_new_instructions(self, tmp_path):
         """Update installs instructions if module now has AGENTS.md."""
-        from lola.cli.install import update_cmd
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -699,6 +701,7 @@ class TestUpdateWithInstructions:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_agent_path.return_value = None
+        mock_target.get_module_path.return_value = project_dir / ".claude" / "modules"
         mock_target.get_instructions_path.return_value = project_dir / "CLAUDE.md"
         mock_target.remove_skill.return_value = True
         mock_target.generate_skill.return_value = True
@@ -710,7 +713,8 @@ class TestUpdateWithInstructions:
             patch("lola.cli.install.ensure_lola_dirs"),
             patch("lola.cli.install.get_registry", return_value=registry),
             patch(
-                "lola.cli.install.get_local_modules_path", return_value=local_modules
+                "lola.cli.install.get_local_modules_path",
+                return_value=local_modules,
             ),
             patch("lola.cli.install.get_target", return_value=mock_target),
         ):
@@ -725,8 +729,6 @@ class TestUpdateWithInstructions:
 
     def test_update_preserves_append_context(self, tmp_path):
         """Update respects append_context from installation record."""
-        from lola.cli.install import update_cmd
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -766,6 +768,7 @@ class TestUpdateWithInstructions:
         mock_target.get_command_path.return_value = project_dir / ".claude" / "commands"
         mock_target.get_agent_path.return_value = None
         mock_target.get_mcp_path.return_value = None
+        mock_target.get_module_path.return_value = project_dir / ".claude" / "modules"
         mock_target.get_instructions_path = real_target.get_instructions_path
         mock_target.generate_instructions = real_target.generate_instructions
         mock_target.remove_instructions = real_target.remove_instructions
@@ -776,7 +779,8 @@ class TestUpdateWithInstructions:
             patch("lola.cli.install.ensure_lola_dirs"),
             patch("lola.cli.install.get_registry", return_value=registry),
             patch(
-                "lola.cli.install.get_local_modules_path", return_value=local_modules
+                "lola.cli.install.get_local_modules_path",
+                return_value=local_modules,
             ),
             patch("lola.cli.install.get_target", return_value=mock_target),
         ):
@@ -800,7 +804,7 @@ class TestUpdateWithInstructions:
 class TestManagedInstructionsTarget:
     """Tests for the ManagedInstructionsTarget mixin."""
 
-    def test_extract_module_blocks(self, tmp_path):
+    def test_extract_module_blocks(self):
         """_extract_module_blocks correctly parses module sections."""
         target = ClaudeCodeTarget()  # Uses ManagedInstructionsTarget
 
@@ -813,7 +817,7 @@ Alpha content
 Beta content
 <!-- lola:module:beta:end -->
 """
-        blocks = target._extract_module_blocks(content)
+        blocks = target._extract_module_blocks(content)  # noqa: SLF001
 
         assert "alpha" in blocks
         assert "beta" in blocks
@@ -824,7 +828,7 @@ Beta content
         """_get_module_markers returns correct markers."""
         target = ClaudeCodeTarget()
 
-        start, end = target._get_module_markers("test-module")
+        start, end = target._get_module_markers("test-module")  # noqa: SLF001
 
         assert start == "<!-- lola:module:test-module:start -->"
         assert end == "<!-- lola:module:test-module:end -->"
@@ -906,8 +910,6 @@ class TestInstructionsRegressions:
         Previously, instructions were only removed if has_instructions=True in the
         installation record, leaving orphaned instructions in CLAUDE.md.
         """
-        from lola.cli.install import update_cmd
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -924,7 +926,8 @@ class TestInstructionsRegressions:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        # Create registry with stale installation (has_instructions=False due to reinstall)
+        # Create registry with stale installation
+        # (has_instructions=False due to reinstall)
         registry = InstallationRegistry(installed_file)
         inst = Installation(
             module_name="test-module",
@@ -950,7 +953,7 @@ class TestInstructionsRegressions:
             "<!-- lola:module:test-module:start -->\n"
             "# Old Instructions\n"
             "<!-- lola:module:test-module:end -->\n"
-            "<!-- lola:instructions:end -->\n"
+            "<!-- lola:instructions:end -->\n",
         )
 
         # Create local module copy (without AGENTS.md)
@@ -967,6 +970,7 @@ class TestInstructionsRegressions:
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_agent_path.return_value = None
         mock_target.get_mcp_path.return_value = None
+        mock_target.get_module_path.return_value = project_dir / ".claude" / "modules"
         mock_target.get_instructions_path.return_value = claude_md
         mock_target.remove_skill.return_value = True
         mock_target.generate_skill.return_value = True
@@ -979,7 +983,8 @@ class TestInstructionsRegressions:
             patch("lola.cli.install.ensure_lola_dirs"),
             patch("lola.cli.install.get_registry", return_value=registry),
             patch(
-                "lola.cli.install.get_local_modules_path", return_value=local_modules
+                "lola.cli.install.get_local_modules_path",
+                return_value=local_modules,
             ),
             patch("lola.cli.install.get_target", return_value=mock_target),
         ):
@@ -1006,8 +1011,6 @@ class TestAppendContext:
 
     def test_append_context_creates_reference(self, tmp_path):
         """--append-context inserts a reference instead of verbatim content."""
-        from lola.targets.install import _install_instructions
-
         target = ClaudeCodeTarget()
         module_dir = tmp_path / "test-module"
         module_dir.mkdir()
@@ -1043,8 +1046,6 @@ class TestAppendContext:
 
     def test_append_context_missing_file_returns_false(self, tmp_path):
         """--append-context returns False when the context file doesn't exist."""
-        from lola.targets.install import _install_instructions
-
         target = ClaudeCodeTarget()
         module_dir = tmp_path / "test-module"
         module_dir.mkdir()
@@ -1065,8 +1066,6 @@ class TestAppendContext:
 
     def test_append_context_preserves_existing_claude_md(self, tmp_path):
         """--append-context preserves existing content in CLAUDE.md."""
-        from lola.targets.install import _install_instructions
-
         target = ClaudeCodeTarget()
         module_dir = tmp_path / "test-module"
         module_dir.mkdir()
@@ -1103,8 +1102,6 @@ class TestAppendContext:
 
     def test_default_behavior_unchanged_without_flag(self, tmp_path):
         """Without --append-context, verbatim copy still works."""
-        from lola.targets.install import _install_instructions
-
         target = ClaudeCodeTarget()
         module_dir = tmp_path / "test-module"
         module_dir.mkdir()
@@ -1138,8 +1135,6 @@ class TestListWithAppendContext:
 
     def test_list_shows_append_context(self, tmp_path):
         """lola list displays append-context when set."""
-        from lola.cli.install import list_installed_cmd
-
         installed_file = tmp_path / ".lola" / "installed.yml"
         installed_file.parent.mkdir(parents=True)
 
@@ -1152,7 +1147,7 @@ class TestListWithAppendContext:
                 project_path=str(tmp_path),
                 has_instructions=True,
                 append_context="module/AGENTS.md",
-            )
+            ),
         )
 
         runner = CliRunner()
@@ -1168,8 +1163,6 @@ class TestListWithAppendContext:
 
     def test_list_hides_append_context_when_not_set(self, tmp_path):
         """lola list omits append-context when not set."""
-        from lola.cli.install import list_installed_cmd
-
         installed_file = tmp_path / ".lola" / "installed.yml"
         installed_file.parent.mkdir(parents=True)
 
@@ -1181,7 +1174,7 @@ class TestListWithAppendContext:
                 scope="project",
                 project_path=str(tmp_path),
                 has_instructions=True,
-            )
+            ),
         )
 
         runner = CliRunner()

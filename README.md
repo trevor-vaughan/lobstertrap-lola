@@ -11,12 +11,12 @@ Lola is a universal AI Package Manager. If an agent's skills were an RPM, Lola i
 
 ## Supported AI Assistants
 
-| Assistant   | Skills | Commands | Agents |
-| ----------- | ------ | -------- | ------ |
-| Claude Code | Yes    | Yes      | Yes    |
-| Cursor      | Yes    | Yes      | Yes    |
-| Gemini CLI  | Yes    | Yes      | N/A    |
-| OpenCode    | Yes    | Yes      | Yes    |
+| Assistant | Skills | Commands | Agents | Modules |
+| --------- | ------ | -------- | ------ | ------- |
+| Claude Code | Yes | Yes | Yes | Yes |
+| Cursor | Yes | Yes | Yes | Yes |
+| Gemini CLI | Yes | Yes | N/A | Yes |
+| OpenCode | Yes | Yes | Yes | Yes |
 
 ## Installation
 
@@ -358,12 +358,16 @@ my-module/
       templates/     # Optional: templates
   commands/          # Optional: slash commands
     review-pr.md
+    review-pr/       # Optional: sidecar directory for multi-file commands
+      phase-1.md
     quick-commit.md
   agents/            # Optional: subagents
     my-agent.md
+  packs/             # Optional: any extra directories are preserved
+    conventions.md
 ```
 
-> **Note:** Modules use auto-discovery. Skills are discovered from `skills/<name>/SKILL.md`, commands from `commands/*.md`, and agents from `agents/*.md`. No manifest file is required.
+> **Note:** Modules use auto-discovery. Skills are discovered from `skills/<name>/SKILL.md`, commands from `commands/*.md`, and agents from `agents/*.md`. No manifest file is required. Any additional directories (e.g., `packs/`, `templates/`, `reference/`) are copied to the target assistant's `modules/<name>/` directory during installation, preserving internal relative paths.
 
 ### SKILL.md
 
@@ -408,12 +412,13 @@ Commands are automatically converted to each assistant's format:
 1. **Marketplaces**: Register catalogs at `~/.lola/market/` with cached data at `~/.lola/market/cache/`
 2. **Discovery**: Search across enabled marketplace caches to find modules
 3. **Registry**: Modules are stored in `~/.lola/modules/`
-4. **Installation**: Skills and commands are converted to each assistant's native format
+4. **Installation**: Skills and commands are converted to each assistant's native format. The full module content tree is also copied to the target's `modules/<name>/` directory, preserving all internal paths so agents can locate shared resources (convention packs, reference files, etc.)
 5. **Prefixing**: Skills and commands are prefixed with module name to avoid conflicts (e.g., `mymodule-skill`)
-6. **Scopes**: 
+6. **Module tree**: Generated skill, command, and agent files receive a plain-text preamble block pointing to the installed module tree, allowing agents to discover module-relative resources at runtime
+7. **Scopes**:
    - **Project scope** (default): Copies modules to `.lola/modules/` within the project
    - **User scope**: Installs globally to platform-appropriate user config directories
-7. **Updates**: `lola mod update` re-fetches from original source; `lola update` regenerates files; `lola market update` refreshes marketplace caches
+8. **Updates**: `lola mod update` re-fetches from original source; `lola update` regenerates files; `lola market update` refreshes marketplace caches
 
 ## Code of Conduct
 

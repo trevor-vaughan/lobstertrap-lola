@@ -8,11 +8,16 @@ This module tests:
 - Helper functions: path rewriting, skill description extraction
 """
 
+import shutil
 from pathlib import Path
 
+import click
 import pytest
+import tomllib
 
+from lola.cli.install import _resolve_install_path
 from lola.exceptions import UnknownAssistantError
+from lola.models import Installation, InstallationRegistry, Module
 from lola.targets import (
     ClaudeCodeTarget,
     CursorTarget,
@@ -23,8 +28,12 @@ from lola.targets import (
     _get_skill_description,
     get_target,
 )
-from lola.cli.install import _resolve_install_path
-
+from lola.targets.install import (
+    _install_module_tree,
+    _uninstall_module_tree,
+    install_to_assistant,
+    uninstall_from_assistant,
+)
 
 # =============================================================================
 # Fixtures
@@ -155,7 +164,9 @@ class TestClaudeCodeTarget:
         assert "Test skill for unit testing" in content
 
     def test_generate_skill_copies_supporting_files(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should copy supporting files and directories."""
         target = ClaudeCodeTarget()
@@ -166,7 +177,9 @@ class TestClaudeCodeTarget:
         assert (skill_dest / "notes.md").exists()
 
     def test_generate_skill_returns_false_for_missing_source(
-        self, dest_path: Path, tmp_path: Path
+        self,
+        dest_path: Path,
+        tmp_path: Path,
     ):
         """generate_skill should return False when source doesn't exist."""
         target = ClaudeCodeTarget()
@@ -175,7 +188,9 @@ class TestClaudeCodeTarget:
         assert result is False
 
     def test_generate_skill_overwrites_existing_directories(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should overwrite existing supporting directories."""
         target = ClaudeCodeTarget()
@@ -206,7 +221,9 @@ class TestClaudeCodeTarget:
         assert "$ARGUMENTS" in content
 
     def test_generate_command_returns_false_for_missing_source(
-        self, dest_path: Path, tmp_path: Path
+        self,
+        dest_path: Path,
+        tmp_path: Path,
     ):
         """generate_command should return False when source doesn't exist."""
         target = ClaudeCodeTarget()
@@ -214,8 +231,158 @@ class TestClaudeCodeTarget:
         result = target.generate_command(missing, dest_path, "missing", "mymod")
         assert result is False
 
+    def test_generate_command_copies_sidecar_directory(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """A co-named sidecar directory (commands/test-cmd/ next to
+        commands/test-cmd.md) holding supporting procedure files must be
+        copied alongside the command file so ${COMMAND_DIR}/test-cmd/* resolves.
+        """
+        sidecar = command_source.parent / "test-cmd"
+        (sidecar / "nested").mkdir(parents=True)
+        (sidecar / "phase.md").write_text("# Phase\nProcedure content.")
+        (sidecar / "nested" / "data.md").write_text("nested data")
+
+        target = ClaudeCodeTarget()
+        result = target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert result is True
+        assert (dest_path / "test-cmd.md").exists()
+        assert (
+            dest_path / "test-cmd" / "phase.md"
+        ).read_text() == "# Phase\nProcedure content."
+        assert (dest_path / "test-cmd" / "nested" / "data.md").exists()
+
+    def test_generate_command_without_sidecar_creates_no_directory(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """When no co-named sidecar directory exists, only the command file is
+        created (no spurious directory)."""
+        target = ClaudeCodeTarget()
+        target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert (dest_path / "test-cmd.md").exists()
+        assert not (dest_path / "test-cmd").exists()
+
+    def test_generate_command_overwrites_existing_sidecar(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """Reinstall (the update path) must replace a stale sidecar directory:
+        files removed from the source disappear, and changed files update."""
+        sidecar = command_source.parent / "test-cmd"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("v1")
+        (sidecar / "stale.md").write_text("removed next time")
+
+        target = ClaudeCodeTarget()
+        target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        # Source changes between installs: phase.md updated, stale.md deleted.
+        (sidecar / "phase.md").write_text("v2")
+        (sidecar / "stale.md").unlink()
+        target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert (dest_path / "test-cmd" / "phase.md").read_text() == "v2"
+        assert not (dest_path / "test-cmd" / "stale.md").exists()
+
+    def test_generate_command_removes_stale_sidecar_when_source_drops_it(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """When a module update drops the sidecar directory, reinstalling the
+        command must remove the previously installed sidecar so stale files
+        don't linger."""
+        sidecar = command_source.parent / "test-cmd"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        target = ClaudeCodeTarget()
+        target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+        assert (dest_path / "test-cmd" / "phase.md").exists()
+
+        # Source drops the sidecar between versions.
+        shutil.rmtree(sidecar)
+        target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert (dest_path / "test-cmd.md").exists()
+        assert not (dest_path / "test-cmd").exists()
+
+    def test_generate_command_with_module_dir_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_command should inject preamble into command file
+        when module_dir provided."""
+        target = ClaudeCodeTarget()
+        module_dir = tmp_path / ".claude" / "modules" / "test-mod"
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert f"Module root: {module_dir}" in content
+
+    def test_generate_command_without_module_dir_no_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """generate_command should NOT inject preamble when module_dir is None."""
+        target = ClaudeCodeTarget()
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert "Module root:" not in content
+
+    def test_generate_command_no_frontmatter_with_module_dir(
+        self,
+        tmp_path: Path,
+        dest_path: Path,
+    ):
+        """Command without frontmatter should get preamble prepended at file start."""
+        cmd_dir = tmp_path / "source" / "commands"
+        cmd_dir.mkdir(parents=True, exist_ok=True)
+        cmd_file = cmd_dir / "plain-cmd.md"
+        cmd_file.write_text("# Plain command\n\nDo the thing with $ARGUMENTS.")
+
+        target = ClaudeCodeTarget()
+        module_dir = tmp_path / ".claude" / "modules" / "test-mod"
+        result = target.generate_command(
+            cmd_file,
+            dest_path,
+            "plain-cmd",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+        content = (dest_path / "plain-cmd.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        assert content.index(f"Module root: {module_dir}") < content.index(
+            "# Plain command",
+        )
+
     def test_generate_agent_adds_model_inherit(
-        self, agent_source: Path, dest_path: Path
+        self,
+        agent_source: Path,
+        dest_path: Path,
     ):
         """generate_agent should add model: inherit to frontmatter."""
         target = ClaudeCodeTarget()
@@ -231,7 +398,9 @@ class TestClaudeCodeTarget:
         assert "# Test Agent" in content
 
     def test_generate_agent_preserves_existing_frontmatter(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_agent should preserve existing frontmatter fields."""
         agent_dir = tmp_path / "agents"
@@ -309,6 +478,22 @@ Agent body content.
 
         assert result is True  # Idempotent - no error
 
+    def test_remove_command_removes_sidecar_directory(self, dest_path: Path):
+        """remove_command should also remove the co-named sidecar directory
+        installed alongside the command file."""
+        target = ClaudeCodeTarget()
+        commands_dir = dest_path
+        (commands_dir / "review-pr.md").write_text("# entry")
+        sidecar = commands_dir / "review-pr"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        result = target.remove_command(commands_dir, "review-pr", "mymod")
+
+        assert result is True
+        assert not (commands_dir / "review-pr.md").exists()
+        assert not sidecar.exists()
+
     def test_remove_agent_deletes_file(self, dest_path: Path):
         """remove_agent should delete the agent file."""
         target = ClaudeCodeTarget()
@@ -331,7 +516,8 @@ Agent body content.
         assert result is True  # Idempotent - no error
 
     def test_remove_command_falls_back_to_legacy_prefixed_name(self, dest_path: Path):
-        """remove_command should delete old prefixed files from pre-migration installs."""
+        """remove_command should delete old prefixed files
+        from pre-migration installs."""
         target = ClaudeCodeTarget()
         commands_dir = dest_path
         # Simulate file created by old lola (mymod.review-pr.md)
@@ -357,7 +543,8 @@ Agent body content.
         assert not legacy_file.exists()
 
     def test_remove_command_removes_both_when_both_exist(self, dest_path: Path):
-        """remove_command should remove both new-style and legacy files when both exist."""
+        """remove_command should remove both new-style and legacy
+        files when both exist."""
         target = ClaudeCodeTarget()
         commands_dir = dest_path
         new_file = commands_dir / "review-pr.md"
@@ -370,6 +557,104 @@ Agent body content.
         assert result is True
         assert not new_file.exists()
         assert not legacy_file.exists()  # Also removed when both coexist
+
+    def test_generate_agent_with_module_dir_preamble(
+        self,
+        agent_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_agent should inject MODULE_DIR preamble when module_dir provided."""
+        target = ClaudeCodeTarget()
+        module_dir = tmp_path / ".claude" / "modules" / "test-mod"
+        result = target.generate_agent(
+            agent_source,
+            dest_path,
+            "test-agent",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+
+        content = (dest_path / "test-agent.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        # Preamble should be between frontmatter and body
+        lines = content.split("\n")
+        closing_idx = None
+        found_first = False
+        for i, line in enumerate(lines):
+            if line.strip() == "---":
+                if not found_first:
+                    found_first = True
+                else:
+                    closing_idx = i
+                    break
+        assert closing_idx is not None
+        remaining = "\n".join(lines[closing_idx + 1 :])
+        assert f"Module root: {module_dir}" in remaining
+
+    def test_generate_agent_without_module_dir_no_preamble(
+        self,
+        agent_source: Path,
+        dest_path: Path,
+    ):
+        """generate_agent should NOT inject preamble when module_dir is None."""
+        target = ClaudeCodeTarget()
+        result = target.generate_agent(
+            agent_source,
+            dest_path,
+            "test-agent",
+            "test-mod",
+        )
+        assert result is True
+
+        content = (dest_path / "test-agent.md").read_text()
+        assert "Module root:" not in content
+
+    def test_get_module_path(self, tmp_path: Path):
+        """Module path should be .claude/modules."""
+        target = ClaudeCodeTarget()
+        path = target.get_module_path(str(tmp_path))
+        assert path == tmp_path / ".claude" / "modules"
+
+    def test_generate_skill_with_module_dir_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_skill should inject preamble into SKILL.md
+        when module_dir provided."""
+        target = ClaudeCodeTarget()
+        module_dir = tmp_path / ".claude" / "modules" / "test-mod"
+        result = target.generate_skill(
+            skill_source,
+            dest_path,
+            "test-skill",
+            module_dir=module_dir,
+        )
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        # Preamble between frontmatter and body
+        assert content.index("---", 4) < content.index(f"Module root: {module_dir}")
+        assert content.index(f"Module root: {module_dir}") < content.index(
+            "# Test Skill",
+        )
+
+    def test_generate_skill_without_module_dir_no_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+    ):
+        """generate_skill should NOT inject preamble when module_dir is None."""
+        target = ClaudeCodeTarget()
+        result = target.generate_skill(skill_source, dest_path, "test-skill")
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert "Module root:" not in content
 
 
 # =============================================================================
@@ -419,7 +704,9 @@ class TestCursorTarget:
         assert "Test skill for unit testing" in content
 
     def test_generate_skill_copies_supporting_files(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should copy supporting files and directories."""
         target = CursorTarget()
@@ -430,7 +717,9 @@ class TestCursorTarget:
         assert (skill_dest / "notes.md").exists()
 
     def test_generate_skill_returns_false_for_missing_skill_md(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_skill should return False when SKILL.md is missing."""
         empty_dir = tmp_path / "empty_skill"
@@ -441,7 +730,9 @@ class TestCursorTarget:
         assert result is False
 
     def test_generate_skill_overwrites_existing_directories(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should overwrite existing supporting directories."""
         target = CursorTarget()
@@ -467,8 +758,48 @@ class TestCursorTarget:
         cmd_file = dest_path / "test-cmd.md"
         assert cmd_file.exists()
 
+    def test_generate_command_with_module_dir_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_command should inject preamble into command file
+        when module_dir provided."""
+        target = CursorTarget()
+        module_dir = tmp_path / ".cursor" / "modules" / "test-mod"
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert f"Module root: {module_dir}" in content
+
+    def test_generate_command_without_module_dir_no_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """generate_command should NOT inject preamble when module_dir is None."""
+        target = CursorTarget()
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert "Module root:" not in content
+
     def test_generate_agent_adds_model_inherit(
-        self, agent_source: Path, dest_path: Path
+        self,
+        agent_source: Path,
+        dest_path: Path,
     ):
         """generate_agent should add model: inherit to frontmatter (Cursor 2.4+)."""
         target = CursorTarget()
@@ -484,7 +815,9 @@ class TestCursorTarget:
         assert "# Test Agent" in content
 
     def test_generate_agent_preserves_existing_frontmatter(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_agent should preserve existing frontmatter fields."""
         agent_dir = tmp_path / "agents"
@@ -550,6 +883,83 @@ Agent body content.
 
         assert result is True  # Idempotent - no error
 
+    def test_get_module_path(self, tmp_path: Path):
+        """Module path should be .cursor/modules."""
+        target = CursorTarget()
+        path = target.get_module_path(str(tmp_path))
+        assert path == tmp_path / ".cursor" / "modules"
+
+    def test_generate_skill_with_module_dir_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_skill should inject preamble into SKILL.md
+        when module_dir provided."""
+        target = CursorTarget()
+        module_dir = tmp_path / ".cursor" / "modules" / "test-mod"
+        result = target.generate_skill(
+            skill_source,
+            dest_path,
+            "test-skill",
+            module_dir=module_dir,
+        )
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        # Preamble between frontmatter and body
+        assert content.index("---", 4) < content.index(f"Module root: {module_dir}")
+        assert content.index(f"Module root: {module_dir}") < content.index(
+            "# Test Skill",
+        )
+
+    def test_generate_skill_without_module_dir_no_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+    ):
+        """generate_skill should NOT inject preamble when module_dir is None."""
+        target = CursorTarget()
+        result = target.generate_skill(skill_source, dest_path, "test-skill")
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert "Module root:" not in content
+
+    def test_generate_command_copies_sidecar_directory(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """Cursor must also copy a co-named command sidecar directory."""
+        sidecar = command_source.parent / "test-cmd"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        target = CursorTarget()
+        result = target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert result is True
+        assert (dest_path / "test-cmd.md").exists()
+        assert (dest_path / "test-cmd" / "phase.md").read_text() == "procedure"
+
+    def test_remove_command_removes_sidecar_directory(self, dest_path: Path):
+        """remove_command should also remove the co-named sidecar directory."""
+        target = CursorTarget()
+        commands_dir = dest_path
+        (commands_dir / "review-pr.md").write_text("# entry")
+        sidecar = commands_dir / "review-pr"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        result = target.remove_command(commands_dir, "review-pr", "mymod")
+
+        assert result is True
+        assert not (commands_dir / "review-pr.md").exists()
+        assert not sidecar.exists()
+
 
 # =============================================================================
 # GeminiTarget Tests
@@ -580,7 +990,9 @@ class TestGeminiTarget:
         assert path == tmp_path / ".gemini" / "commands"
 
     def test_generate_skill_raises_not_implemented(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should raise NotImplementedError."""
         target = GeminiTarget()
@@ -588,7 +1000,9 @@ class TestGeminiTarget:
             target.generate_skill(skill_source, dest_path, "skill", str(dest_path))
 
     def test_generate_skills_batch_creates_file(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """generate_skills_batch should create GEMINI.md with skill listings."""
         target = GeminiTarget()
@@ -611,7 +1025,9 @@ class TestGeminiTarget:
         assert "Test skill description" in content
 
     def test_generate_skills_batch_updates_existing_file(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """generate_skills_batch should update existing file content."""
         target = GeminiTarget()
@@ -633,7 +1049,9 @@ Some existing content here.
         assert "### mymod" in content
 
     def test_generate_skills_batch_replaces_module_section(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """generate_skills_batch should replace existing module section."""
         target = GeminiTarget()
@@ -655,7 +1073,9 @@ Some existing content here.
         assert content.count("### mymod") == 1
 
     def test_generate_skills_batch_preserves_other_modules(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """generate_skills_batch should preserve other modules' sections."""
         target = GeminiTarget()
@@ -676,7 +1096,9 @@ Some existing content here.
         assert "Module 2 skill" in content
 
     def test_generate_command_creates_toml_file(
-        self, command_source: Path, dest_path: Path
+        self,
+        command_source: Path,
+        dest_path: Path,
     ):
         """generate_command should create TOML file with proper format."""
         target = GeminiTarget()
@@ -692,7 +1114,9 @@ Some existing content here.
         assert "{{args}}" in content  # $ARGUMENTS should be converted
 
     def test_generate_command_escapes_special_chars_in_description(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_command should escape special characters in description."""
         cmd_dir = tmp_path / "commands"
@@ -714,7 +1138,9 @@ Command body.
         assert "\\\\backslash" in content
 
     def test_generate_command_escapes_triple_quotes_in_prompt(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_command should escape triple quotes in prompt body."""
         cmd_dir = tmp_path / "commands"
@@ -743,12 +1169,31 @@ Some text after.
         assert r'\"""' in content
 
         # Validate the TOML is parseable
-        import tomllib
-
         parsed = tomllib.loads(content)
         assert "prompt" in parsed
         # The prompt should contain the original triple quotes (unescaped)
         assert '"""' in parsed["prompt"]
+
+    def test_generate_command_module_dir_skipped_in_toml(
+        self,
+        command_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """Gemini TOML commands should NOT contain preamble even
+        when module_dir provided."""
+        target = GeminiTarget()
+        module_dir = tmp_path / ".gemini" / "modules" / "test-mod"
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.toml").read_text()
+        assert "Module root:" not in content
 
     def test_get_command_filename_uses_toml_extension(self):
         """Command filename should use .toml extension (no prefix)."""
@@ -757,7 +1202,9 @@ Some text after.
         assert filename == "do-thing.toml"
 
     def test_remove_skill_removes_module_section(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """remove_skill should remove module section from managed file."""
         target = GeminiTarget()
@@ -765,10 +1212,16 @@ Some text after.
 
         # Add two modules
         target.generate_skills_batch(
-            dest_file, "module1", [("s1", "desc1", skill_source)], str(tmp_path)
+            dest_file,
+            "module1",
+            [("s1", "desc1", skill_source)],
+            str(tmp_path),
         )
         target.generate_skills_batch(
-            dest_file, "module2", [("s2", "desc2", skill_source)], str(tmp_path)
+            dest_file,
+            "module2",
+            [("s2", "desc2", skill_source)],
+            str(tmp_path),
         )
 
         # Remove module1
@@ -787,7 +1240,8 @@ Some text after.
         assert result is True
 
     def test_remove_command_falls_back_to_legacy_toml(self, tmp_path: Path):
-        """remove_command should delete old prefixed .toml files from pre-migration installs."""
+        """remove_command should delete old prefixed .toml files
+        from pre-migration installs."""
         target = GeminiTarget()
         commands_dir = tmp_path / "commands"
         commands_dir.mkdir()
@@ -799,6 +1253,56 @@ Some text after.
 
         assert result is True
         assert not legacy_file.exists()
+
+    def test_get_module_path(self, tmp_path: Path):
+        """Module path should be .gemini/modules."""
+        target = GeminiTarget()
+        path = target.get_module_path(str(tmp_path))
+        assert path == tmp_path / ".gemini" / "modules"
+
+    def test_generate_skills_batch_with_module_dir(
+        self,
+        tmp_path: Path,
+        skill_source: Path,
+    ):
+        """Skills batch should include module directory line
+        when module_dir provided."""
+        target = GeminiTarget()
+        dest_file = tmp_path / "GEMINI.md"
+        dest_file.write_text("# GEMINI\n")
+
+        module_dir = tmp_path / ".gemini" / "modules" / "test-mod"
+        target.generate_skills_batch(
+            dest_file,
+            "test-mod",
+            [("my-skill", "Do something cool", skill_source)],
+            str(tmp_path),
+            module_dir=module_dir,
+        )
+
+        content = dest_file.read_text()
+        assert f"**Module root:** `{module_dir}`" in content
+
+    def test_generate_skills_batch_without_module_dir(
+        self,
+        tmp_path: Path,
+        skill_source: Path,
+    ):
+        """Skills batch should NOT include module directory line
+        when module_dir is None."""
+        target = GeminiTarget()
+        dest_file = tmp_path / "GEMINI.md"
+        dest_file.write_text("# GEMINI\n")
+
+        target.generate_skills_batch(
+            dest_file,
+            "test-mod",
+            [("my-skill", "Do something cool", skill_source)],
+            str(tmp_path),
+        )
+
+        content = dest_file.read_text()
+        assert "Module root:" not in content
 
 
 # =============================================================================
@@ -848,7 +1352,9 @@ class TestOpenCodeTarget:
         assert "description: Test skill for unit testing" in content
 
     def test_generate_skill_copies_supporting_files(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """generate_skill should copy supporting files alongside SKILL.md."""
         target = OpenCodeTarget()
@@ -873,7 +1379,9 @@ class TestOpenCodeTarget:
         assert result is False
 
     def test_generate_command_creates_markdown_file(
-        self, command_source: Path, dest_path: Path
+        self,
+        command_source: Path,
+        dest_path: Path,
     ):
         """generate_command should create markdown file (passthrough)."""
         target = OpenCodeTarget()
@@ -888,8 +1396,65 @@ class TestOpenCodeTarget:
         assert "---" in content
         assert "description:" in content
 
+    def test_generate_command_copies_sidecar_directory(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """OpenCode must also copy a co-named command sidecar directory."""
+        sidecar = command_source.parent / "test-cmd"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        target = OpenCodeTarget()
+        result = target.generate_command(command_source, dest_path, "test-cmd", "mymod")
+
+        assert result is True
+        assert (dest_path / "test-cmd.md").exists()
+        assert (dest_path / "test-cmd" / "phase.md").read_text() == "procedure"
+
+    def test_generate_command_with_module_dir_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_command should inject preamble into command file
+        when module_dir provided."""
+        target = OpenCodeTarget()
+        module_dir = tmp_path / ".opencode" / "modules" / "test-mod"
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+            module_dir=module_dir,
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert f"Module root: {module_dir}" in content
+
+    def test_generate_command_without_module_dir_no_preamble(
+        self,
+        command_source: Path,
+        dest_path: Path,
+    ):
+        """generate_command should NOT inject preamble when module_dir is None."""
+        target = OpenCodeTarget()
+        result = target.generate_command(
+            command_source,
+            dest_path,
+            "test-cmd",
+            "test-mod",
+        )
+        assert result is True
+        content = (dest_path / "test-cmd.md").read_text()
+        assert "Module root:" not in content
+
     def test_generate_agent_adds_mode_subagent(
-        self, agent_source: Path, dest_path: Path
+        self,
+        agent_source: Path,
+        dest_path: Path,
     ):
         """generate_agent should add mode: subagent to frontmatter."""
         target = OpenCodeTarget()
@@ -903,8 +1468,24 @@ class TestOpenCodeTarget:
         assert "mode: subagent" in content
         assert "description: Test agent for troubleshooting" in content
 
+    def test_remove_command_removes_sidecar_directory(self, dest_path: Path):
+        """remove_command should also remove the co-named sidecar directory."""
+        target = OpenCodeTarget()
+        commands_dir = dest_path
+        (commands_dir / "review-pr.md").write_text("# entry")
+        sidecar = commands_dir / "review-pr"
+        sidecar.mkdir()
+        (sidecar / "phase.md").write_text("procedure")
+
+        result = target.remove_command(commands_dir, "review-pr", "mymod")
+
+        assert result is True
+        assert not (commands_dir / "review-pr.md").exists()
+        assert not sidecar.exists()
+
     def test_remove_command_cleans_up_legacy_singular_dir(self, tmp_path: Path):
-        """remove_command removes files from old .opencode/command/ (singular) directory."""
+        """remove_command removes files from old .opencode/command/
+        (singular) directory."""
         target = OpenCodeTarget()
         opencode_dir = tmp_path / ".opencode"
         # New-style directory (current)
@@ -934,6 +1515,51 @@ class TestOpenCodeTarget:
 
         assert result is True
         assert not (legacy_dir / "code-reviewer.md").exists()
+
+    def test_get_module_path(self, tmp_path: Path):
+        """Module path should be .opencode/modules."""
+        target = OpenCodeTarget()
+        path = target.get_module_path(str(tmp_path))
+        assert path == tmp_path / ".opencode" / "modules"
+
+    def test_generate_skill_with_module_dir_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_skill should inject preamble into SKILL.md
+        when module_dir provided."""
+        target = OpenCodeTarget()
+        module_dir = tmp_path / ".opencode" / "modules" / "test-mod"
+        result = target.generate_skill(
+            skill_source,
+            dest_path,
+            "test-skill",
+            module_dir=module_dir,
+        )
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        # Preamble between frontmatter and body
+        assert content.index("---", 4) < content.index(f"Module root: {module_dir}")
+        assert content.index(f"Module root: {module_dir}") < content.index(
+            "# Test Skill",
+        )
+
+    def test_generate_skill_without_module_dir_no_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+    ):
+        """generate_skill should NOT inject preamble when module_dir is None."""
+        target = OpenCodeTarget()
+        result = target.generate_skill(skill_source, dest_path, "test-skill")
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert "Module root:" not in content
 
 
 # =============================================================================
@@ -1003,7 +1629,9 @@ class TestOpenClawTarget:
         assert "Test skill for unit testing" in content
 
     def test_generate_skill_copies_supporting_files(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should copy supporting files and directories."""
         target = OpenClawTarget()
@@ -1014,7 +1642,9 @@ class TestOpenClawTarget:
         assert (skill_dest / "notes.md").exists()
 
     def test_generate_skill_returns_false_for_missing_source(
-        self, dest_path: Path, tmp_path: Path
+        self,
+        dest_path: Path,
+        tmp_path: Path,
     ):
         """generate_skill should return False when source doesn't exist."""
         target = OpenClawTarget()
@@ -1023,7 +1653,9 @@ class TestOpenClawTarget:
         assert result is False
 
     def test_generate_skill_returns_false_for_missing_skill_md(
-        self, tmp_path: Path, dest_path: Path
+        self,
+        tmp_path: Path,
+        dest_path: Path,
     ):
         """generate_skill should return False when SKILL.md is missing."""
         empty_dir = tmp_path / "empty_skill"
@@ -1034,7 +1666,9 @@ class TestOpenClawTarget:
         assert result is False
 
     def test_generate_skill_overwrites_existing(
-        self, skill_source: Path, dest_path: Path
+        self,
+        skill_source: Path,
+        dest_path: Path,
     ):
         """generate_skill should overwrite existing supporting directories."""
         target = OpenClawTarget()
@@ -1047,7 +1681,9 @@ class TestOpenClawTarget:
         assert (skill_dest / "scripts" / "new_file.py").exists()
 
     def test_generate_command_returns_false(
-        self, command_source: Path, dest_path: Path
+        self,
+        command_source: Path,
+        dest_path: Path,
     ):
         """generate_command should return False — commands not supported."""
         target = OpenClawTarget()
@@ -1078,6 +1714,51 @@ class TestOpenClawTarget:
         result = target.remove_skill(dest_path, "nonexistent")
         assert result is False
 
+    def test_get_module_path(self, tmp_path: Path):
+        """Module path should be modules/ at project root."""
+        target = OpenClawTarget()
+        path = target.get_module_path(str(tmp_path))
+        assert path == tmp_path / "modules"
+
+    def test_generate_skill_with_module_dir_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+        tmp_path: Path,
+    ):
+        """generate_skill should inject preamble into SKILL.md
+        when module_dir provided."""
+        target = OpenClawTarget()
+        module_dir = tmp_path / "modules" / "test-mod"
+        result = target.generate_skill(
+            skill_source,
+            dest_path,
+            "test-skill",
+            module_dir=module_dir,
+        )
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert f"Module root: {module_dir}" in content
+        # Preamble between frontmatter and body
+        assert content.index("---", 4) < content.index(f"Module root: {module_dir}")
+        assert content.index(f"Module root: {module_dir}") < content.index(
+            "# Test Skill",
+        )
+
+    def test_generate_skill_without_module_dir_no_preamble(
+        self,
+        skill_source: Path,
+        dest_path: Path,
+    ):
+        """generate_skill should NOT inject preamble when module_dir is None."""
+        target = OpenClawTarget()
+        result = target.generate_skill(skill_source, dest_path, "test-skill")
+        assert result is True
+
+        content = (dest_path / "test-skill" / "SKILL.md").read_text()
+        assert "Module root:" not in content
+
     def test_full_skill_installation_workflow(self, skill_source: Path, tmp_path: Path):
         """Test complete install and remove workflow for OpenClaw."""
         project_path = tmp_path / "project"
@@ -1088,7 +1769,10 @@ class TestOpenClawTarget:
         skill_dest.mkdir(parents=True)
 
         result = target.generate_skill(
-            skill_source, skill_dest, "mymod-test-skill", str(project_path)
+            skill_source,
+            skill_dest,
+            "mymod-test-skill",
+            str(project_path),
         )
 
         assert result is True
@@ -1138,15 +1822,11 @@ class TestResolveInstallPath:
 
     def test_workspace_with_non_openclaw_raises(self, tmp_path: Path):
         """--workspace with a non-openclaw assistant raises UsageError."""
-        import click
-
         with pytest.raises(click.UsageError, match="only valid with -a openclaw"):
             _resolve_install_path("claude-code", str(tmp_path), "work")
 
     def test_none_assistant_with_workspace_raises(self, tmp_path: Path):
         """--workspace with no assistant raises UsageError."""
-        import click
-
         with pytest.raises(click.UsageError, match="only valid with -a openclaw"):
             _resolve_install_path(None, str(tmp_path), "work")
 
@@ -1172,7 +1852,9 @@ class TestManagedSectionTarget:
         assert "read_file" in target.HEADER
 
     def test_generate_skills_batch_includes_relative_path(
-        self, tmp_path: Path, skill_source: Path
+        self,
+        tmp_path: Path,
+        skill_source: Path,
     ):
         """Skills should include relative path to SKILL.md."""
         target = GeminiTarget()
@@ -1282,7 +1964,9 @@ class TestTargetIntegration:
     """Integration-style tests verifying complete workflows."""
 
     def test_full_skill_installation_workflow_claude(
-        self, skill_source: Path, tmp_path: Path
+        self,
+        skill_source: Path,
+        tmp_path: Path,
     ):
         """Test complete skill installation for Claude Code."""
         project_path = tmp_path / "project"
@@ -1294,7 +1978,10 @@ class TestTargetIntegration:
 
         # Generate skill
         result = target.generate_skill(
-            skill_source, skill_dest, "mymod-test-skill", str(project_path)
+            skill_source,
+            skill_dest,
+            "mymod-test-skill",
+            str(project_path),
         )
 
         assert result is True
@@ -1309,7 +1996,9 @@ class TestTargetIntegration:
         assert not skill_dir.exists()
 
     def test_full_skill_installation_workflow_cursor(
-        self, skill_source: Path, tmp_path: Path
+        self,
+        skill_source: Path,
+        tmp_path: Path,
     ):
         """Test complete skill installation for Cursor (2.4+)."""
         project_path = tmp_path / "project"
@@ -1321,7 +2010,10 @@ class TestTargetIntegration:
 
         # Generate skill
         result = target.generate_skill(
-            skill_source, skill_dest, "mymod-test-skill", str(project_path)
+            skill_source,
+            skill_dest,
+            "mymod-test-skill",
+            str(project_path),
         )
 
         assert result is True
@@ -1336,7 +2028,9 @@ class TestTargetIntegration:
         assert not skill_dir.exists()
 
     def test_full_skill_installation_workflow_gemini(
-        self, skill_source: Path, tmp_path: Path
+        self,
+        skill_source: Path,
+        tmp_path: Path,
     ):
         """Test complete skill installation for Gemini CLI."""
         project_path = tmp_path / "project"
@@ -1351,7 +2045,10 @@ class TestTargetIntegration:
             ("skill2", "Second skill", skill_source),
         ]
         result = target.generate_skills_batch(
-            skill_dest, "mymod", skills, str(project_path)
+            skill_dest,
+            "mymod",
+            skills,
+            str(project_path),
         )
 
         assert result is True
@@ -1386,7 +2083,9 @@ class TestTargetIntegration:
             assert expected_file.exists(), f"File not created for {target.name}"
 
     def test_agent_generation_supported_targets(
-        self, agent_source: Path, tmp_path: Path
+        self,
+        agent_source: Path,
+        tmp_path: Path,
     ):
         """Test agent generation for targets that support agents."""
         # Claude Code - should add model: inherit
@@ -1394,7 +2093,10 @@ class TestTargetIntegration:
         claude_dest.mkdir()
         claude_target = ClaudeCodeTarget()
         result = claude_target.generate_agent(
-            agent_source, claude_dest, "agent", "mymod"
+            agent_source,
+            claude_dest,
+            "agent",
+            "mymod",
         )
         assert result is True
         content = (claude_dest / "agent.md").read_text()
@@ -1405,7 +2107,10 @@ class TestTargetIntegration:
         cursor_dest.mkdir()
         cursor_target = CursorTarget()
         result = cursor_target.generate_agent(
-            agent_source, cursor_dest, "agent", "mymod"
+            agent_source,
+            cursor_dest,
+            "agent",
+            "mymod",
         )
         assert result is True
         content = (cursor_dest / "agent.md").read_text()
@@ -1416,8 +2121,295 @@ class TestTargetIntegration:
         opencode_dest.mkdir()
         opencode_target = OpenCodeTarget()
         result = opencode_target.generate_agent(
-            agent_source, opencode_dest, "agent", "mymod"
+            agent_source,
+            opencode_dest,
+            "agent",
+            "mymod",
         )
         assert result is True
         content = (opencode_dest / "agent.md").read_text()
         assert "mode: subagent" in content
+
+
+class TestModuleTreeInstall:
+    """Tests for module tree copy to target modules directory."""
+
+    @pytest.fixture
+    def module_with_packs(self, tmp_path: Path) -> Path:
+        """Create a module source with skills, agents, commands, and packs."""
+        mod_dir = tmp_path / "source" / "test-module" / "module"
+        # Skills
+        skill_dir = mod_dir / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\ndescription: test\n---\n# Skill")
+        # Agents
+        agents_dir = mod_dir / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "test-agent.md").write_text(
+            "---\ndescription: agent\n---\n# Agent",
+        )
+        # Commands
+        cmd_dir = mod_dir / "commands"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "test-cmd.md").write_text("# Command")
+        # Packs (the arbitrary extra directory)
+        packs_dir = mod_dir / "packs"
+        packs_dir.mkdir(parents=True)
+        (packs_dir / "severity.md").write_text("# Severity levels")
+        (packs_dir / "base.md").write_text("# Base conventions")
+        return mod_dir.parent  # return test-module/ (the module root)
+
+    def test_install_module_tree_copies_full_content(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """Module tree should copy all content including packs/."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        target = ClaudeCodeTarget()
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+
+        module_dir = _install_module_tree(
+            target,
+            module,
+            module_with_packs,
+            project_path,
+            scope="project",
+        )
+
+        assert module_dir is not None
+        assert module_dir.exists()
+        assert module_dir == Path(project_path) / ".claude" / "modules" / "test-module"
+        # Verify packs/ was copied
+        assert (module_dir / "packs" / "severity.md").exists()
+        assert (module_dir / "packs" / "base.md").exists()
+        # Verify skills/ was also copied (full content tree)
+        assert (module_dir / "skills" / "test-skill" / "SKILL.md").exists()
+        # Verify agents/ was copied
+        assert (module_dir / "agents" / "test-agent.md").exists()
+
+    def test_install_module_tree_overwrites_existing(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """Reinstall should replace old module tree cleanly."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        target = ClaudeCodeTarget()
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+
+        # First install
+        module_dir = _install_module_tree(
+            target,
+            module,
+            module_with_packs,
+            project_path,
+        )
+        assert module_dir is not None
+        # Add a stale file
+        (module_dir / "stale.md").write_text("stale")
+
+        # Second install
+        module_dir = _install_module_tree(
+            target,
+            module,
+            module_with_packs,
+            project_path,
+        )
+        assert module_dir is not None
+        # Stale file should be gone
+        assert not (module_dir / "stale.md").exists()
+        # Fresh content should be present
+        assert (module_dir / "packs" / "severity.md").exists()
+
+    def test_uninstall_module_tree_removes_directory(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """Uninstall should remove the module tree directory."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        target = ClaudeCodeTarget()
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+
+        module_dir = _install_module_tree(
+            target,
+            module,
+            module_with_packs,
+            project_path,
+        )
+        assert module_dir is not None
+        assert module_dir.exists()
+
+        inst = Installation(
+            module_name="test-module",
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+        )
+        result = _uninstall_module_tree(target, inst)
+        assert result is True
+        assert not module_dir.exists()
+
+    def test_uninstall_module_tree_idempotent(self, tmp_path: Path):
+        """Uninstall when no tree exists should return False without error."""
+        target = ClaudeCodeTarget()
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+
+        inst = Installation(
+            module_name="nonexistent",
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+        )
+        result = _uninstall_module_tree(target, inst)
+        assert result is False
+
+    def test_install_to_assistant_creates_module_tree(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """install_to_assistant should copy module tree and inject
+        module_dir into agents."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+        local_modules = tmp_path / ".lola" / "modules"
+        local_modules.mkdir(parents=True)
+        registry = InstallationRegistry(tmp_path / "installed.yml")
+
+        install_to_assistant(
+            module=module,
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+            local_modules=local_modules,
+            registry=registry,
+            force=True,
+        )
+
+        # Module tree should exist
+        module_tree = Path(project_path) / ".claude" / "modules" / "test-module"
+        assert module_tree.exists(), f"Module tree not found at {module_tree}"
+        assert (module_tree / "packs" / "severity.md").exists()
+
+        # Agent file should contain module-dir preamble
+        agent_file = Path(project_path) / ".claude" / "agents" / "test-agent.md"
+        assert agent_file.exists(), f"Agent file not found at {agent_file}"
+        agent_content = agent_file.read_text()
+        assert f"Module root: {module_tree}" in agent_content
+
+    def test_uninstall_from_assistant_removes_module_tree(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """uninstall_from_assistant should remove the module tree directory."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+        local_modules = tmp_path / ".lola" / "modules"
+        local_modules.mkdir(parents=True)
+        registry = InstallationRegistry(tmp_path / "installed.yml")
+
+        install_to_assistant(
+            module=module,
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+            local_modules=local_modules,
+            registry=registry,
+            force=True,
+        )
+
+        module_tree = Path(project_path) / ".claude" / "modules" / "test-module"
+        assert module_tree.exists()
+
+        installations = registry.find(module.name)
+        assert len(installations) > 0
+        inst = installations[0]
+
+        uninstall_from_assistant(inst, registry)
+
+        assert not module_tree.exists(), "Module tree should be removed after uninstall"
+
+    def test_install_to_assistant_skill_has_preamble(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """install_to_assistant should inject module_dir preamble into SKILL.md."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+        local_modules = tmp_path / ".lola" / "modules"
+        local_modules.mkdir(parents=True)
+        registry = InstallationRegistry(tmp_path / "installed.yml")
+
+        install_to_assistant(
+            module=module,
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+            local_modules=local_modules,
+            registry=registry,
+            force=True,
+        )
+
+        # Skill SKILL.md should contain module-dir preamble
+        skill_file = (
+            Path(project_path) / ".claude" / "skills" / "test-skill" / "SKILL.md"
+        )
+        assert skill_file.exists()
+        content = skill_file.read_text()
+        module_tree = Path(project_path) / ".claude" / "modules" / "test-module"
+        assert f"Module root: {module_tree}" in content
+
+    def test_install_to_assistant_command_has_preamble(
+        self,
+        module_with_packs: Path,
+        tmp_path: Path,
+    ):
+        """install_to_assistant should inject module_dir preamble into command files."""
+        module = Module.from_path(module_with_packs)
+        assert module is not None
+
+        project_path = str(tmp_path / "project")
+        Path(project_path).mkdir()
+        local_modules = tmp_path / ".lola" / "modules"
+        local_modules.mkdir(parents=True)
+        registry = InstallationRegistry(tmp_path / "installed.yml")
+
+        install_to_assistant(
+            module=module,
+            assistant="claude-code",
+            scope="project",
+            project_path=project_path,
+            local_modules=local_modules,
+            registry=registry,
+            force=True,
+        )
+
+        # Command file should contain module-dir preamble
+        cmd_file = Path(project_path) / ".claude" / "commands" / "test-cmd.md"
+        assert cmd_file.exists()
+        content = cmd_file.read_text()
+        module_tree = Path(project_path) / ".claude" / "modules" / "test-module"
+        assert f"Module root: {module_tree}" in content

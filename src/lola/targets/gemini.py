@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import lola.frontmatter as fm
+
 from .base import (
     ManagedInstructionsTarget,
     ManagedSectionTarget,
@@ -28,6 +29,11 @@ class GeminiTarget(MCPSupportMixin, ManagedInstructionsTarget, ManagedSectionTar
     MANAGED_FILE = "GEMINI.md"
     INSTRUCTIONS_FILE = "GEMINI.md"
 
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Return .gemini/modules for module content tree installation."""
+        base = Path.home() if scope == "user" else Path(project_path)
+        return base / ".gemini" / "modules"
+
     def get_command_path(self, project_path: str, scope: str = "project") -> Path:
         base = Path.home() if scope == "user" else Path(project_path)
         return base / ".gemini" / "commands"
@@ -46,6 +52,8 @@ class GeminiTarget(MCPSupportMixin, ManagedInstructionsTarget, ManagedSectionTar
         dest_dir: Path,
         cmd_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,  # noqa: ARG002
     ) -> bool:
         """Convert command to Gemini TOML format."""
         if not source_path.exists():

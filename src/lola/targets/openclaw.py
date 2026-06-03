@@ -5,8 +5,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import lola.config as config
-from .base import BaseAssistantTarget
+from lola import config
+
+from .base import BaseAssistantTarget, _inject_preamble
 
 
 class OpenClawTarget(BaseAssistantTarget):
@@ -37,6 +38,12 @@ class OpenClawTarget(BaseAssistantTarget):
             return Path(workspace).expanduser().absolute()
         return Path.home() / ".openclaw" / f"workspace-{workspace}"
 
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Return modules dir for module content tree installation."""
+        if scope == "user":
+            return self.resolve_workspace(None) / "modules"
+        return Path(project_path) / "modules"
+
     def get_skill_path(self, project_path: str, scope: str = "project") -> Path:
         if scope == "user":
             return self.resolve_workspace(None) / "skills"
@@ -58,6 +65,8 @@ class OpenClawTarget(BaseAssistantTarget):
         dest_path: Path,
         skill_name: str,
         project_path: str | None = None,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Copy skill directory with SKILL.md and supporting files."""
         if not source_path.exists():
@@ -70,7 +79,8 @@ class OpenClawTarget(BaseAssistantTarget):
         if not skill_file.exists():
             return False
 
-        (skill_dest / "SKILL.md").write_text(skill_file.read_text())
+        content = _inject_preamble(skill_file.read_text(), module_dir)
+        (skill_dest / "SKILL.md").write_text(content)
 
         for item in source_path.iterdir():
             if item.name == "SKILL.md":
@@ -91,5 +101,7 @@ class OpenClawTarget(BaseAssistantTarget):
         dest_dir: Path,  # noqa: ARG002
         cmd_name: str,  # noqa: ARG002
         module_name: str,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,  # noqa: ARG002
     ) -> bool:
         return False

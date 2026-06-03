@@ -1,10 +1,13 @@
 """Tests for the core/installer module."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 
-from lola.targets import get_registry, copy_module_to_local, install_to_assistant
-from lola.models import Module, InstallationRegistry
+from lola.exceptions import InstallationError
+from lola.models import InstallationRegistry, Module
+from lola.targets import copy_module_to_local, get_registry, install_to_assistant
+from lola.targets.install import _run_install_hook
 
 
 class TestGetRegistry:
@@ -160,6 +163,7 @@ Do {cmd}.
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = None
         mock_target.get_agent_path.return_value = None
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
         mock_target.generate_agent.return_value = True
@@ -197,6 +201,7 @@ Do {cmd}.
         mock_target.get_skill_path.return_value = None
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_agent_path.return_value = None
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
         mock_target.generate_agent.return_value = True
@@ -235,6 +240,7 @@ Do {cmd}.
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_agent_path.return_value = None
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
         mock_target.generate_agent.return_value = True
@@ -260,18 +266,12 @@ Do {cmd}.
         assert "skill1" in installations[0].skills
         assert "cmd1" in installations[0].commands
 
-    # Note: test_install_missing_skill_source and test_install_missing_command_source
-    # were removed because with auto-discovery, skills and commands are only
-    # discovered if they actually exist. There's no manifest to list non-existent items.
-
 
 class TestRunInstallHook:
     """Tests for _run_install_hook()."""
 
     def test_hook_executes_successfully(self, tmp_path):
         """Hook script executes and returns successfully."""
-        from lola.targets.install import _run_install_hook
-
         module_dir = tmp_path / "mymodule"
         module_dir.mkdir()
         script_dir = module_dir / "scripts"
@@ -296,8 +296,6 @@ class TestRunInstallHook:
 
     def test_hook_receives_environment_variables(self, tmp_path):
         """Hook script receives all LOLA_* environment variables."""
-        from lola.targets.install import _run_install_hook
-
         module_dir = tmp_path / "mymodule"
         module_dir.mkdir()
         script_dir = module_dir / "scripts"
@@ -312,7 +310,7 @@ echo "PROJECT_PATH=$LOLA_PROJECT_PATH" >> {output_file}
 echo "ASSISTANT=$LOLA_ASSISTANT" >> {output_file}
 echo "SCOPE=$LOLA_SCOPE" >> {output_file}
 echo "HOOK=$LOLA_HOOK" >> {output_file}
-"""
+""",
         )
         script.chmod(0o755)
 
@@ -340,10 +338,6 @@ echo "HOOK=$LOLA_HOOK" >> {output_file}
 
     def test_hook_fails_raises_installation_error(self, tmp_path):
         """Hook script failure raises InstallationError."""
-        from lola.targets.install import _run_install_hook
-        from lola.exceptions import InstallationError
-        import pytest
-
         module_dir = tmp_path / "mymodule"
         module_dir.mkdir()
         script_dir = module_dir / "scripts"
@@ -371,10 +365,6 @@ echo "HOOK=$LOLA_HOOK" >> {output_file}
 
     def test_hook_missing_raises_installation_error(self, tmp_path):
         """Missing hook script raises InstallationError."""
-        from lola.targets.install import _run_install_hook
-        from lola.exceptions import InstallationError
-        import pytest
-
         module_dir = tmp_path / "mymodule"
         module_dir.mkdir()
 
@@ -397,10 +387,6 @@ echo "HOOK=$LOLA_HOOK" >> {output_file}
 
     def test_hook_path_traversal_raises_installation_error(self, tmp_path):
         """Security test: Hook with path traversal raises InstallationError."""
-        from lola.targets.install import _run_install_hook
-        from lola.exceptions import InstallationError
-        import pytest
-
         module_dir = tmp_path / "mymodule"
         module_dir.mkdir()
 

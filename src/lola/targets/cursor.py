@@ -12,12 +12,15 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import lola.config as config
+from lola import config
+
 from .base import (
-    MCPSupportMixin,
     BaseAssistantTarget,
-    _generate_passthrough_command,
+    MCPSupportMixin,
     _generate_agent_with_frontmatter,
+    _generate_passthrough_command,
+    _inject_preamble,
+    _resolve_source_content,
 )
 
 
@@ -43,6 +46,11 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         base = Path.home() if scope == "user" else Path(project_path)
         return base / ".cursor" / "rules"
 
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Return .cursor/modules for module content tree installation."""
+        base = Path.home() if scope == "user" else Path(project_path)
+        return base / ".cursor" / "modules"
+
     def get_mcp_path(self, project_path: str, scope: str = "project") -> Path:
         base = Path.home() if scope == "user" else Path(project_path)
         return base / ".cursor" / "mcp.json"
@@ -53,6 +61,8 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         dest_path: Path,
         skill_name: str,
         project_path: str | None = None,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Copy skill directory with SKILL.md and supporting files.
 
@@ -69,7 +79,8 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         if not skill_file.exists():
             return False
 
-        (skill_dest / "SKILL.md").write_text(skill_file.read_text())
+        content = _inject_preamble(skill_file.read_text(), module_dir)
+        (skill_dest / "SKILL.md").write_text(content)
 
         # Copy supporting files
         for item in source_path.iterdir():
@@ -90,9 +101,16 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         dest_dir: Path,
         cmd_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         filename = self.get_command_filename(module_name, cmd_name)
-        return _generate_passthrough_command(source_path, dest_dir, filename)
+        return _generate_passthrough_command(
+            source_path,
+            dest_dir,
+            filename,
+            module_dir=module_dir,
+        )
 
     def generate_agent(
         self,
@@ -100,6 +118,8 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         dest_dir: Path,
         agent_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Generate agent file with Cursor-compatible frontmatter.
 
@@ -115,6 +135,7 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
             dest_dir,
             filename,
             {"name": agent_full_name, "model": "inherit"},
+            module_dir=module_dir,
         )
 
     def generate_instructions(
@@ -124,8 +145,6 @@ class CursorTarget(MCPSupportMixin, BaseAssistantTarget):
         module_name: str,
     ) -> bool:
         """Generate .mdc file with alwaysApply: true for module instructions."""
-        from .base import _resolve_source_content
-
         content = _resolve_source_content(source)
         if not content:
             return False

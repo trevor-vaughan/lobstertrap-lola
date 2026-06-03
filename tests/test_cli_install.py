@@ -1,17 +1,19 @@
 """Tests for the install CLI commands."""
 
 import shutil
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from lola.cli.install import (
     _fetch_from_marketplace,
     install_cmd,
+    list_installed_cmd,
     uninstall_cmd,
     update_cmd,
-    list_installed_cmd,
 )
 from lola.market.manager import parse_market_ref
-from lola.models import Installation, InstallationRegistry
+from lola.models import Installation, InstallationRegistry, Module
+
+SIGINT_EXIT_CODE = 130
 
 
 class TestInstallCmd:
@@ -87,12 +89,14 @@ class TestInstallCmd:
             patch("lola.cli.install.get_registry") as mock_registry,
             patch("lola.cli.install.get_local_modules_path", return_value=modules_dir),
             patch(
-                "lola.cli.install.install_to_assistant", return_value=1
+                "lola.cli.install.install_to_assistant",
+                return_value=1,
             ) as mock_install,
         ):
             mock_registry.return_value = InstallationRegistry(installed_file)
             result = cli_runner.invoke(
-                install_cmd, ["sample-module", "-a", "claude-code"]
+                install_cmd,
+                ["sample-module", "-a", "claude-code"],
             )
 
         assert result.exit_code == 0
@@ -113,8 +117,6 @@ class TestInstallCmd:
 
     def test_hook_precedence_cli_over_module(self, tmp_path):
         """CLI flags take precedence over module lola.yaml hooks."""
-        from lola.models import Module
-
         module_dir = tmp_path / "test-module"
         module_dir.mkdir()
 
@@ -122,7 +124,7 @@ class TestInstallCmd:
         lola_yaml.write_text(
             """hooks:
   pre-install: scripts/module-pre.sh
-"""
+""",
         )
 
         skills_dir = module_dir / "skills" / "test-skill"
@@ -132,7 +134,7 @@ class TestInstallCmd:
 name: test
 description: Test skill
 ---
-# Test"""
+# Test""",
         )
 
         module = Module.from_path(module_dir, content_dirname="/")
@@ -158,7 +160,8 @@ class TestMarketplaceReference:
         assert parse_market_ref("@official") is None
 
     def test_fetch_from_marketplace_renames_repository_folder_to_module_name(
-        self, tmp_path
+        self,
+        tmp_path,
     ):
         """Marketplace installs should be stored under the marketplace module name."""
         modules_dir = tmp_path / ".lola" / "modules"
@@ -175,7 +178,7 @@ class TestMarketplaceReference:
         (skills_dir / "SKILL.md").write_text("---\ndescription: x\n---\n")
 
         (market_dir / "demo.yml").write_text(
-            "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n"
+            "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n",
         )
         (cache_dir / "demo.yml").write_text(
             "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n"
@@ -183,7 +186,7 @@ class TestMarketplaceReference:
             "  - name: claude-md-management\n"
             "    description: Tools\n"
             "    version: 1.0.0\n"
-            f"    repository: {source_repo.as_posix()}\n"
+            f"    repository: {source_repo.as_posix()}\n",
         )
 
         with (
@@ -193,7 +196,8 @@ class TestMarketplaceReference:
             patch("lola.cli.install.save_source_info"),
         ):
             module_path, module_dict = _fetch_from_marketplace(
-                "demo", "claude-md-management"
+                "demo",
+                "claude-md-management",
             )
 
         assert module_dict["name"] == "claude-md-management"
@@ -203,7 +207,9 @@ class TestMarketplaceReference:
         assert not (modules_dir / "anthropics-claude-plugins-official").exists()
 
     def test_marketplace_install_lists_catalog_name_and_registry_record(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
+        tmp_path,
     ):
         """Marketplace installs should list and persist the catalog module name."""
         modules_dir = tmp_path / ".lola" / "modules"
@@ -223,7 +229,7 @@ class TestMarketplaceReference:
         (skills_dir / "SKILL.md").write_text("---\ndescription: x\n---\n")
 
         (market_dir / "demo.yml").write_text(
-            "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n"
+            "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n",
         )
         (cache_dir / "demo.yml").write_text(
             "name: demo\nurl: file:///tmp/demo.yml\nenabled: true\n"
@@ -232,7 +238,7 @@ class TestMarketplaceReference:
             "    description: Tools\n"
             "    version: 1.0.0\n"
             f"    repository: {source_repo.as_posix()}\n"
-            "    path: plugins/claude-md-management\n"
+            "    path: plugins/claude-md-management\n",
         )
 
         with (
@@ -321,12 +327,11 @@ class TestUninstallCmd:
         (command_dest / "mymodule.cmd1.md").write_text("content")
 
         # Create mock target
-        from unittest.mock import MagicMock
-
         mock_target = MagicMock()
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_command_filename.return_value = "mymodule.cmd1.md"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.remove_skill.return_value = True
 
         with (
@@ -366,8 +371,6 @@ class TestUpdateCmd:
 
     def test_update_specific_module(self, cli_runner, sample_module, tmp_path):
         """Update a specific module."""
-        from unittest.mock import MagicMock
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -397,6 +400,7 @@ class TestUpdateCmd:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_command_filename.side_effect = lambda m, c: f"{m}-{c}.md"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.remove_skill.return_value = True
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
@@ -415,8 +419,6 @@ class TestUpdateCmd:
 
     def test_update_removes_orphaned_commands(self, cli_runner, tmp_path):
         """Update removes orphaned command files when command removed from module."""
-        from unittest.mock import MagicMock
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -468,6 +470,7 @@ class TestUpdateCmd:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_command_filename.side_effect = lambda m, c: f"{m}.{c}.md"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.remove_skill.return_value = True
         mock_target.remove_command.side_effect = mock_remove_command
         mock_target.generate_skill.return_value = True
@@ -488,8 +491,6 @@ class TestUpdateCmd:
 
     def test_update_removes_orphaned_skills(self, cli_runner, tmp_path):
         """Update removes orphaned skill files when skill removed from module."""
-        from unittest.mock import MagicMock
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -498,7 +499,8 @@ class TestUpdateCmd:
         module_dir = modules_dir / "mymodule"
         module_dir.mkdir()
 
-        # Create skills directory with skill (auto-discovered via SKILL.md) - skill2 was removed
+        # Create skills directory with skill (auto-discovered via
+        # SKILL.md) - skill2 was removed
         skills_dir = module_dir / "skills"
         skills_dir.mkdir()
         skill_dir = skills_dir / "skill1"
@@ -539,6 +541,7 @@ class TestUpdateCmd:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_command_filename.side_effect = lambda m, c: f"{m}-{c}.md"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.remove_skill.side_effect = mock_remove_skill
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
@@ -559,8 +562,6 @@ class TestUpdateCmd:
 
     def test_update_updates_registry_after_cleanup(self, cli_runner, tmp_path):
         """Update updates registry to reflect current module state."""
-        from unittest.mock import MagicMock
-
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -603,6 +604,7 @@ class TestUpdateCmd:
         mock_target.get_skill_path.return_value = skill_dest
         mock_target.get_command_path.return_value = command_dest
         mock_target.get_command_filename.side_effect = lambda m, c: f"{m}.{c}.md"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.remove_skill.return_value = True
         mock_target.generate_skill.return_value = True
         mock_target.generate_command.return_value = True
@@ -624,9 +626,8 @@ class TestUpdateCmd:
         assert set(updated_inst.commands) == {"cmd1"}
 
     def test_update_uses_prefixed_name_on_conflict(self, cli_runner, tmp_path):
-        """Update uses prefixed skill name when another module owns the unprefixed name."""
-        from unittest.mock import MagicMock
-
+        """Update uses prefixed skill name when another module
+        owns the unprefixed name."""
         modules_dir = tmp_path / ".lola" / "modules"
         modules_dir.mkdir(parents=True)
         installed_file = tmp_path / ".lola" / "installed.yml"
@@ -641,7 +642,7 @@ class TestUpdateCmd:
         skill1_dir = skills1_dir / "shared"
         skill1_dir.mkdir()
         (skill1_dir / "SKILL.md").write_text(
-            "---\ndescription: Shared skill\n---\nModule 1"
+            "---\ndescription: Shared skill\n---\nModule 1",
         )
 
         # Create module2 with skill "shared" (same name)
@@ -652,7 +653,7 @@ class TestUpdateCmd:
         skill2_dir = skills2_dir / "shared"
         skill2_dir.mkdir()
         (skill2_dir / "SKILL.md").write_text(
-            "---\ndescription: Shared skill\n---\nModule 2"
+            "---\ndescription: Shared skill\n---\nModule 2",
         )
 
         # Create registry with both modules installed to same project/assistant
@@ -685,6 +686,7 @@ class TestUpdateCmd:
             project_path / ".claude" / "commands"
         )
         mock_target.get_agent_path.return_value = project_path / ".claude" / "agents"
+        mock_target.get_module_path.return_value = tmp_path / "modules"
         mock_target.get_mcp_path.return_value = project_path / ".claude" / "mcp.json"
         mock_target.get_instructions_path.return_value = None
         mock_target.uses_managed_section = False
@@ -703,9 +705,9 @@ class TestUpdateCmd:
         assert result.exit_code == 0
 
         # module2 should use prefixed name since module1 owns "shared"
-        updated_inst2 = [
+        updated_inst2 = next(
             i for i in registry.find("module2") if i.project_path == str(project_path)
-        ][0]
+        )
         assert "module2_shared" in updated_inst2.skills, (
             f"Expected 'module2_shared' in skills, got {updated_inst2.skills}"
         )
@@ -751,7 +753,7 @@ class TestListInstalledCmd:
                 assistant="claude-code",
                 scope="user",
                 skills=["module1-skill1"],
-            )
+            ),
         )
         registry.add(
             Installation(
@@ -759,7 +761,7 @@ class TestListInstalledCmd:
                 assistant="cursor",
                 scope="user",
                 commands=["cmd1"],
-            )
+            ),
         )
 
         with (
@@ -785,14 +787,14 @@ class TestListInstalledCmd:
                 module_name="module1",
                 assistant="claude-code",
                 scope="user",
-            )
+            ),
         )
         registry.add(
             Installation(
                 module_name="module2",
                 assistant="cursor",
                 scope="user",
-            )
+            ),
         )
 
         with (
@@ -815,7 +817,7 @@ class TestListInstalledCmd:
 class TestInstallCmdInteractive:
     """Tests for install_cmd interactive prompts (T009, T010, T011)."""
 
-    def test_install_no_module_noninteractive_errors(self, cli_runner, tmp_path):
+    def test_install_no_module_noninteractive_errors(self, cli_runner):
         """T009: non-interactive + no module_name → SystemExit(1)."""
         with (
             patch("lola.cli.install.ensure_lola_dirs"),
@@ -827,7 +829,8 @@ class TestInstallCmdInteractive:
         assert "non-interactive" in result.output
 
     def test_install_no_module_interactive_no_modules_registered(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
     ):
         """T009: interactive + no modules registered → message, exit 0."""
         with (
@@ -839,7 +842,7 @@ class TestInstallCmdInteractive:
         assert result.exit_code == 0
         assert "No modules registered" in result.output
 
-    def test_install_no_module_interactive_picker_cancelled(self, cli_runner, tmp_path):
+    def test_install_no_module_interactive_picker_cancelled(self, cli_runner):
         """T009: interactive + user cancels module picker → SystemExit(130)."""
         with (
             patch("lola.cli.install.ensure_lola_dirs"),
@@ -851,11 +854,14 @@ class TestInstallCmdInteractive:
             patch("lola.cli.install.select_module", return_value=None),
         ):
             result = cli_runner.invoke(install_cmd, [])
-        assert result.exit_code == 130
+        assert result.exit_code == SIGINT_EXIT_CODE
         assert "Cancelled" in result.output
 
     def test_install_no_assistant_interactive_picker_used(
-        self, cli_runner, sample_module, tmp_path
+        self,
+        cli_runner,
+        sample_module,
+        tmp_path,
     ):
         """T010: interactive + no -a flag → select_assistants is called."""
         modules_dir = tmp_path / ".lola" / "modules"
@@ -871,7 +877,8 @@ class TestInstallCmdInteractive:
             patch("lola.cli.install.install_to_assistant", return_value=1),
             patch("lola.cli.install.is_interactive", return_value=True),
             patch(
-                "lola.cli.install.select_assistants", return_value=["claude-code"]
+                "lola.cli.install.select_assistants",
+                return_value=["claude-code"],
             ) as mock_select,
         ):
             mock_registry.return_value = InstallationRegistry(installed_file)
@@ -881,7 +888,10 @@ class TestInstallCmdInteractive:
         mock_select.assert_called_once()
 
     def test_install_explicit_assistant_no_prompt(
-        self, cli_runner, sample_module, tmp_path
+        self,
+        cli_runner,
+        sample_module,
+        tmp_path,
     ):
         """T010: explicit -a flag → select_assistants is NOT called."""
         modules_dir = tmp_path / ".lola" / "modules"
@@ -900,14 +910,18 @@ class TestInstallCmdInteractive:
         ):
             mock_registry.return_value = InstallationRegistry(installed_file)
             result = cli_runner.invoke(
-                install_cmd, ["sample-module", "-a", "claude-code"]
+                install_cmd,
+                ["sample-module", "-a", "claude-code"],
             )
 
         assert result.exit_code == 0
         mock_select.assert_not_called()
 
     def test_install_assistant_picker_cancelled_exits_130(
-        self, cli_runner, sample_module, tmp_path
+        self,
+        cli_runner,
+        sample_module,
+        tmp_path,
     ):
         """T011: user cancels assistant picker → exit 130, no installation."""
         modules_dir = tmp_path / ".lola" / "modules"
@@ -927,14 +941,12 @@ class TestInstallCmdInteractive:
             mock_registry.return_value = InstallationRegistry(installed_file)
             result = cli_runner.invoke(install_cmd, ["sample-module"])
 
-        assert result.exit_code == 130
+        assert result.exit_code == SIGINT_EXIT_CODE
         mock_install.assert_not_called()
 
 
 def _fake_module(name: str):
     """Create a minimal Module-like object for testing."""
-    from unittest.mock import MagicMock
-
     m = MagicMock()
     m.name = name
     return m
@@ -959,7 +971,9 @@ class TestUninstallCmdInteractive:
         assert result.exit_code == 1
 
     def test_uninstall_no_module_interactive_no_modules_installed(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
+        tmp_path,
     ):
         """Interactive with no installed modules → message and exit 0."""
         installed_file = tmp_path / "installed.yml"
@@ -975,7 +989,9 @@ class TestUninstallCmdInteractive:
         assert "No modules installed" in result.output
 
     def test_uninstall_no_module_interactive_picker_cancelled(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
+        tmp_path,
     ):
         """Interactive picker cancelled → exit 130."""
         installed_file = tmp_path / "installed.yml"
@@ -985,7 +1001,7 @@ class TestUninstallCmdInteractive:
                 module_name="my-module",
                 assistant="claude-code",
                 scope="user",
-            )
+            ),
         )
         with (
             patch("lola.cli.install.ensure_lola_dirs"),
@@ -995,7 +1011,7 @@ class TestUninstallCmdInteractive:
         ):
             result = cli_runner.invoke(uninstall_cmd, [])
 
-        assert result.exit_code == 130
+        assert result.exit_code == SIGINT_EXIT_CODE
 
     def test_uninstall_no_module_interactive_picker_selects(self, cli_runner, tmp_path):
         """Interactive picker returns module → proceeds with uninstall flow."""
@@ -1006,7 +1022,7 @@ class TestUninstallCmdInteractive:
                 module_name="my-module",
                 assistant="claude-code",
                 scope="user",
-            )
+            ),
         )
         with (
             patch("lola.cli.install.ensure_lola_dirs"),
@@ -1021,7 +1037,9 @@ class TestUninstallCmdInteractive:
         assert "my-module" in result.output
 
     def test_uninstall_multiple_installations_interactive_picker(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
+        tmp_path,
     ):
         """Multiple installations in interactive mode → select_installations prompt."""
         installed_file = tmp_path / "installed.yml"
@@ -1032,7 +1050,7 @@ class TestUninstallCmdInteractive:
                 assistant="claude-code",
                 scope="project",
                 project_path="/proj/a",
-            )
+            ),
         )
         registry.add(
             Installation(
@@ -1040,7 +1058,7 @@ class TestUninstallCmdInteractive:
                 assistant="cursor",
                 scope="project",
                 project_path="/proj/a",
-            )
+            ),
         )
         with (
             patch("lola.cli.install.ensure_lola_dirs"),
@@ -1057,7 +1075,9 @@ class TestUninstallCmdInteractive:
         assert "Cancelled" in result.output
 
     def test_uninstall_multiple_installations_noninteractive_confirm_all(
-        self, cli_runner, tmp_path
+        self,
+        cli_runner,
+        tmp_path,
     ):
         """Multiple installations in non-interactive mode → 'Uninstall all?' prompt."""
         installed_file = tmp_path / "installed.yml"
@@ -1068,7 +1088,7 @@ class TestUninstallCmdInteractive:
                 assistant="claude-code",
                 scope="project",
                 project_path="/proj/a",
-            )
+            ),
         )
         registry.add(
             Installation(
@@ -1076,7 +1096,7 @@ class TestUninstallCmdInteractive:
                 assistant="cursor",
                 scope="project",
                 project_path="/proj/a",
-            )
+            ),
         )
         with (
             patch("lola.cli.install.ensure_lola_dirs"),

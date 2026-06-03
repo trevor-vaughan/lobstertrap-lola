@@ -37,6 +37,18 @@ When a module is added (via `lola mod add` or through a market install), it gets
 
 When installed into a project, Lola copies the module from the cache and generates assistant-specific files. Each project has independent copies and generated files.
 
+The installation pipeline runs in this order:
+
+1. **Module copy** -- module cached to `.lola/modules/<name>/`
+2. **Pre-install hook** -- optional script from `lola.yaml`
+3. **Module tree** -- full content tree copied to the target's `modules/<name>/` directory (e.g., `.claude/modules/<name>/`), preserving all internal paths for agent-accessible shared resources
+4. **Skills** -- skill directories copied or registered per target format
+5. **Commands** -- command files copied; file-based targets (Claude Code, Cursor, OpenCode) also copy co-named sidecar directories
+6. **Agents** -- agent files generated with target-specific frontmatter and a plain-text preamble pointing to the installed module tree
+7. **MCPs** -- MCP server configs merged into target config files
+8. **Instructions** -- module instructions written to managed sections
+9. **Post-install hook** -- optional script from `lola.yaml`
+
 ## Source Handlers
 
 Lola uses a strategy pattern for fetching modules from different sources:

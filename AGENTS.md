@@ -87,7 +87,11 @@ lola uninstall my-module --scope user
 - `src/lola/market/manager.py` - MarketplaceRegistry class for marketplace operations
 - `src/lola/market/search.py` - Search functionality across marketplace caches
 - `src/lola/config.py` - Global paths (LOLA_HOME, MODULES_DIR, INSTALLED_FILE, MARKET_DIR, CACHE_DIR)
-- `src/lola/targets.py` - Assistant definitions and file generators (ASSISTANTS dict, generate_* functions)
+- `src/lola/targets/` - Assistant target package:
+  - `__init__.py` - TARGETS registry, `get_target()` lookup
+  - `base.py` - `AssistantTarget` ABC, `BaseAssistantTarget` defaults, shared helpers (`_generate_agent_with_frontmatter`, `_generate_passthrough_command`, `_get_content_path`)
+  - `install.py` - Install/uninstall orchestration (`install_to_assistant`, `_install_module_tree`, `_uninstall_module_tree`, `_install_skills/commands/agents/mcps/instructions`)
+  - `claude_code.py`, `cursor.py`, `gemini.py`, `openclaw.py`, `opencode.py` - Per-target implementations
 - `src/lola/parsers.py` - Source fetching (SourceHandler classes) and skill/command parsing
 - `src/lola/frontmatter.py` - YAML frontmatter parsing
 
@@ -102,8 +106,18 @@ my-module/
       SKILL.md         # Required: skill definition with frontmatter
       scripts/         # Optional: supporting files
   commands/            # Slash commands (*.md files)
+    review.md          # A command
+    review/            # Optional: co-named sidecar dir of supporting files
+      phase.md         #   for a multi-file command (copied with review.md)
   agents/              # Subagents (*.md files)
 ```
+
+A command can be a single `*.md` file or a *multi-file command*: an entry file
+`commands/<cmd>.md` plus a co-named sidecar directory `commands/<cmd>/` holding
+supporting files the entry reads at runtime (e.g. via a path relative to its own
+location). The sidecar directory is copied verbatim alongside the entry file for
+file-based targets (Claude Code, Cursor, OpenCode) and removed on uninstall. The
+sidecar's files are not registered as separate commands.
 
 ### Marketplace Structure
 
@@ -136,18 +150,64 @@ modules:
 
 Defined in `targets.py` TARGETS dict. Each assistant has different output formats:
 
-| Assistant | Skills | Commands | Agents |
-|-----------|--------|----------|--------|
-| claude-code | `.claude/skills/<skill>/SKILL.md` | `.claude/commands/<cmd>.md` | `.claude/agents/<agent>.md` |
-| cursor | `.cursor/skills/<skill>/SKILL.md` | `.cursor/commands/<cmd>.md` | `.cursor/agents/<agent>.md` |
-| gemini-cli | `GEMINI.md` (managed section) | `.gemini/commands/<cmd>.toml` | N/A |
-| openclaw | `~/.openclaw/workspace/skills/<skill>/SKILL.md` | N/A | N/A |
-| opencode | `AGENTS.md` (managed section) | `.opencode/commands/<cmd>.md` | `.opencode/agents/<agent>.md` |
+| Assistant | Skills | Commands | Agents | Modules |
+|-----------|--------|----------|--------|---------|
+| claude-code | `.claude/skills/<skill>/SKILL.md` | `.claude/commands/<cmd>.md` | `.claude/agents/<agent>.md` | `.claude/modules/<name>/` |
+| cursor | `.cursor/skills/<skill>/SKILL.md` | `.cursor/commands/<cmd>.md` | `.cursor/agents/<agent>.md` | `.cursor/modules/<name>/` |
+| gemini-cli | `GEMINI.md` (managed section) | `.gemini/commands/<cmd>.toml` | N/A | `.gemini/modules/<name>/` |
+| openclaw | `~/.openclaw/workspace/skills/<skill>/SKILL.md` | N/A | N/A | `modules/<name>/` |
+| opencode | `AGENTS.md` (managed section) | `.opencode/commands/<cmd>.md` | `.opencode/agents/<agent>.md` | `.opencode/modules/<name>/` |
 
 Agent frontmatter is modified during generation:
 - Claude Code: `name` (agent name) and `model: inherit` are added
 - Cursor: `name` (agent name) and `model: inherit` are added
 - OpenCode: `mode: subagent` is added
+
+**Module tree:** During installation, the entire module content tree is copied to
+the target's `modules/<name>/` directory. This preserves internal relative paths
+between module files (e.g. a `packs/` directory that agents reference at
+runtime). Skills, commands, and agents all receive a module-dir preamble block
+between frontmatter and body, pointing to the installed module tree. Assets can
+use this path to locate module-relative resources like convention packs,
+reference files, or other shared content that falls outside the standard
+skills/commands/agents directories.
+
+The preamble is plain text inlined between frontmatter and body:
+
+```markdown
+Module root: .claude/modules/review-council
+This is the installed root of the module. Resolve all relative file references in this document against the path above.
+Example: packs/foo.md -> .claude/modules/review-council/packs/foo.md
+```
+
+**Exceptions:** Gemini CLI commands use TOML format and do not receive the
+preamble. The Gemini `ManagedSectionTarget` emits
+`**Module root:** \`<path>\`` with an example resolution line in the skills
+batch section instead.
+
+Example generated agent file with preamble:
+```markdown
+---
+name: divisor-guard-code
+model: inherit
+---
+Module root: .claude/modules/review-council
+This is the installed root of the module. Resolve all relative file references in this document against the path above.
+Example: packs/foo.md -> .claude/modules/review-council/packs/foo.md
+
+# Guard - Code Review
+...
+```
+
+User-scope module tree paths:
+
+| Target | User Scope Module Dir |
+|--------|----------------------|
+| claude-code | `~/.claude/modules/<name>/` |
+| cursor | `~/.cursor/modules/<name>/` |
+| gemini-cli | `~/.gemini/modules/<name>/` |
+| openclaw | `~/.openclaw/workspace/modules/<name>/` |
+| opencode | `~/.config/opencode/modules/<name>/` |
 
 **Backwards compatibility:** Uninstall also checks for old prefixed filenames
 (`<module>.<cmd>.md`, `<module>.<agent>.md`) so installs made before prefix
@@ -170,6 +230,14 @@ Tests use Click's `CliRunner` for CLI testing. Key fixtures in `tests/conftest.p
 - `mock_assistant_paths` - creates mock assistant output directories
 - `marketplace_with_modules` - creates marketplace with test modules
 - `marketplace_disabled` - creates disabled marketplace for testing
+
+**Unused parameters in ABC overrides (ruff ARG002 vs ty):**
+When test stubs or `BaseAssistantTarget` override an ABC method without using
+every parameter, ruff raises `ARG002` (unused method argument). Do **not**
+prefix the parameter with `_` — `ty` enforces the Liskov Substitution Principle
+and rejects parameter name changes in overrides. Instead, annotate each unused
+parameter with an inline `# noqa: ARG002` comment. This matches the existing
+pattern in `src/lola/targets/base.py` (e.g. `BaseAssistantTarget` stubs).
 
 **Marketplace testing patterns:**
 - HTTP requests are mocked using `unittest.mock.patch` with `urllib.request.urlopen`

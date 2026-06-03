@@ -18,11 +18,12 @@ import re
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
 import lola.frontmatter as fm
+from lola.config import SKILL_FILE
 
 
 def _resolve_source_content(source: Path | str) -> str | None:
@@ -31,7 +32,7 @@ def _resolve_source_content(source: Path | str) -> str | None:
         if not source.exists():
             return None
         return source.read_text().strip()
-    elif isinstance(source, str):
+    if isinstance(source, str):
         return source.strip()
     return None
 
@@ -97,8 +98,18 @@ class AssistantTarget(ABC):
         dest_path: Path,
         skill_name: str,
         project_path: str | None = None,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
-        """Generate skill file(s) for this assistant."""
+        """Generate skill file(s) for this assistant.
+
+        Args:
+            source_path: Source skill directory containing SKILL.md.
+            dest_path: Destination directory for generated skill.
+            skill_name: Name of the skill.
+            project_path: Project directory path (optional).
+            module_dir: When provided, inject a module-dir preamble into SKILL.md.
+        """
         ...
 
     @abstractmethod
@@ -108,8 +119,20 @@ class AssistantTarget(ABC):
         dest_dir: Path,
         cmd_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
-        """Generate command file for this assistant."""
+        """Generate command file for this assistant.
+
+        Args:
+            source_path: Path to the source command markdown file.
+            dest_dir: Destination directory for commands.
+            cmd_name: Command name.
+            module_name: Module name for filename construction.
+            module_dir: Path to the installed module tree. When provided,
+                a preamble block is injected so commands can locate
+                module-relative resources at runtime.
+        """
         ...
 
     @abstractmethod
@@ -119,8 +142,21 @@ class AssistantTarget(ABC):
         dest_dir: Path,
         agent_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
-        """Generate agent file for this assistant."""
+        """Generate agent file for this assistant.
+
+        Args:
+            source_path: Path to the source agent markdown file.
+            dest_dir: Destination directory for the generated agent file.
+            agent_name: Name of the agent.
+            module_name: Name of the module this agent belongs to.
+            module_dir: Path to the installed module tree. When provided,
+                a boundary-delimited module-dir preamble is injected
+                between frontmatter and body so agents can locate
+                module-relative resources at runtime.
+        """
         ...
 
     @abstractmethod
@@ -154,6 +190,8 @@ class AssistantTarget(ABC):
         module_name: str,
         skills: list[tuple[str, str, Path]],
         project_path: str | None,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Generate skills as a batch (for managed section targets)."""
         ...
@@ -170,7 +208,25 @@ class AssistantTarget(ABC):
 
     @abstractmethod
     def get_mcp_path(self, project_path: str, scope: str = "project") -> Path | None:
-        """Get the MCP config file path for this assistant. Returns None if not supported.
+        """Get the MCP config file path for this assistant.
+
+        Returns None if not supported.
+
+        Args:
+            project_path: Project directory path (ignored for user scope)
+            scope: "project" for project-local, "user" for user-global
+        """
+        ...
+
+    @abstractmethod
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Get the modules directory for this assistant.
+
+        The module tree directory holds a copy of the full module content
+        tree during installation. This preserves internal relative paths
+        so agents can locate shared resources (convention packs, reference
+        files, etc.) that fall outside the standard skills/commands/agents
+        directories.
 
         Args:
             project_path: Project directory path (ignored for user scope)
@@ -256,11 +312,10 @@ class BaseAssistantTarget(AssistantTarget):
         """Default: no agent support. Override in subclasses."""
         return None
 
-    def get_instructions_path(self, project_path: str, scope: str = "project") -> Path:  # noqa: ARG002
+    def get_instructions_path(self, project_path: str, scope: str = "project") -> Path:
         """Default: no instructions path. Override in subclasses."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_instructions_path()"
-        )
+        msg = f"{self.__class__.__name__} must implement get_instructions_path()"
+        raise NotImplementedError(msg)
 
     def generate_agent(
         self,
@@ -268,6 +323,8 @@ class BaseAssistantTarget(AssistantTarget):
         dest_dir: Path,  # noqa: ARG002
         agent_name: str,  # noqa: ARG002
         module_name: str,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,  # noqa: ARG002
     ) -> bool:
         """Default: agents not supported."""
         return False
@@ -311,6 +368,8 @@ class BaseAssistantTarget(AssistantTarget):
         module_name: str,  # noqa: ARG002
         skills: list[tuple[str, str, Path]],  # noqa: ARG002
         project_path: str | None,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,  # noqa: ARG002
     ) -> bool:
         """Default: batch generation not supported."""
         return False
@@ -318,6 +377,11 @@ class BaseAssistantTarget(AssistantTarget):
     def get_mcp_path(self, project_path: str, scope: str = "project") -> Path | None:  # noqa: ARG002
         """Default: MCP not supported. Override in subclasses."""
         return None
+
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Default: no module path. Override in subclasses."""
+        msg = f"{self.__class__.__name__} must implement get_module_path()"
+        raise NotImplementedError(msg)
 
     def generate_mcps(
         self,
@@ -347,7 +411,8 @@ class BaseAssistantTarget(AssistantTarget):
 
         Removes the current unprefixed file and, when present alongside it,
         also removes the legacy prefixed file ({module_name}.{cmd_name}.ext)
-        left over from pre-prefix-removal installs.
+        left over from pre-prefix-removal installs, plus any co-named sidecar
+        directory of supporting procedure files installed with the command.
 
         Returns True if removed or didn't exist (idempotent).
         """
@@ -360,6 +425,10 @@ class BaseAssistantTarget(AssistantTarget):
         legacy_file = dest_dir / f"{module_name}.{cmd_name}{ext}"
         if legacy_file.exists():
             legacy_file.unlink()
+        # Remove the co-named sidecar directory copied during install.
+        sidecar_dir = dest_dir / Path(filename).stem
+        if sidecar_dir.is_dir():
+            shutil.rmtree(sidecar_dir)
         return True
 
     def remove_agent(
@@ -431,16 +500,23 @@ to learn the detailed instructions and workflows.
 
     def generate_skill(
         self,
-        source_path: Path,  # noqa: ARG002
-        dest_path: Path,  # noqa: ARG002
-        skill_name: str,  # noqa: ARG002
-        project_path: str | None = None,  # noqa: ARG002
+        source_path: Path,
+        dest_path: Path,
+        skill_name: str,
+        project_path: str | None = None,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
-        """Managed section targets use batch generation - this should not be called directly."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__}.generate_skill should not be called directly. "
-            "Use generate_skills_batch() instead."
+        """Managed section targets use batch generation.
+
+        This should not be called directly.
+        """
+        msg = (
+            f"{self.__class__.__name__}.generate_skill"
+            " should not be called directly."
+            " Use generate_skills_batch() instead."
         )
+        raise NotImplementedError(msg)
 
     def generate_skills_batch(
         self,
@@ -448,6 +524,8 @@ to learn the detailed instructions and workflows.
         module_name: str,
         skills: list[tuple[str, str, Path]],
         project_path: str | None,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Update managed markdown file with skill listings for a module."""
         if dest_file.exists():
@@ -460,15 +538,16 @@ to learn the detailed instructions and workflows.
 
         # Build skills block for this module
         skills_block = f"\n### {module_name}\n\n"
+        if module_dir is not None:
+            skills_block += (
+                f"**Module root:** `{module_dir}`\n"
+                f"Example: `packs/foo.md` -> `{module_dir}/packs/foo.md`\n\n"
+            )
         for skill_name, description, skill_path in skills:
-            if project_root:
-                try:
-                    relative_path = skill_path.relative_to(project_root)
-                    skill_md_path = relative_path / "SKILL.md"
-                except ValueError:
-                    skill_md_path = skill_path / "SKILL.md"
-            else:
-                skill_md_path = skill_path / "SKILL.md"
+            skill_md_path = _resolve_skill_md_path(
+                skill_path,
+                project_root,
+            )
             skills_block += f"#### {skill_name}\n"
             skills_block += f"**When to use:** {description}\n"
             skills_block += (
@@ -505,7 +584,12 @@ to learn the detailed instructions and workflows.
             )
             content = content[:start_idx] + new_section + content[end_idx:]
         else:
-            lola_section = f"\n\n{self.HEADER}{self.START_MARKER}\n{skills_block}{self.END_MARKER}\n"
+            lola_section = (
+                f"\n\n{self.HEADER}"
+                f"{self.START_MARKER}\n"
+                f"{skills_block}"
+                f"{self.END_MARKER}\n"
+            )
             content = content.rstrip() + lola_section
 
         dest_file.write_text(content)
@@ -604,7 +688,7 @@ class ManagedInstructionsTarget:
         ):
             start_idx = content.index(self.INSTRUCTIONS_START_MARKER)
             end_idx = content.index(self.INSTRUCTIONS_END_MARKER) + len(
-                self.INSTRUCTIONS_END_MARKER
+                self.INSTRUCTIONS_END_MARKER,
             )
             existing_section = content[start_idx:end_idx]
             section_content = existing_section[
@@ -674,7 +758,7 @@ class ManagedInstructionsTarget:
 
         start_idx = content.index(self.INSTRUCTIONS_START_MARKER)
         end_idx = content.index(self.INSTRUCTIONS_END_MARKER) + len(
-            self.INSTRUCTIONS_END_MARKER
+            self.INSTRUCTIONS_END_MARKER,
         )
         existing_section = content[start_idx:end_idx]
         section_content = existing_section[
@@ -747,6 +831,20 @@ class MCPSupportMixin:
 # =============================================================================
 
 
+def _resolve_skill_md_path(
+    skill_path: Path,
+    project_root: Path | None,
+) -> Path:
+    """Resolve the SKILL.md path, relative to project root when possible."""
+    if project_root:
+        try:
+            relative_path = skill_path.relative_to(project_root)
+            return relative_path / "SKILL.md"
+        except ValueError:
+            pass
+    return skill_path / "SKILL.md"
+
+
 def _get_skill_description(source_path: Path) -> str:
     """Extract description from SKILL.md frontmatter."""
     skill_file = source_path / "SKILL.md"
@@ -755,17 +853,93 @@ def _get_skill_description(source_path: Path) -> str:
     return fm.get_description(skill_file) or ""
 
 
+def _build_module_dir_preamble(module_dir: Path) -> str:
+    """Build the module-dir preamble block.
+
+    Returns a plain-text block with prose lines that LLMs consume
+    at runtime to resolve relative file paths::
+
+        Module root: <path>
+        This is the installed root of the module. Resolve all
+        relative file references in this document against the
+        path above.
+        Example: packs/foo.md -> <path>/packs/foo.md
+
+    The block starts and ends with a newline for clean separation from
+    surrounding content (frontmatter closing ``---`` or file start).
+    """
+    return (
+        "\n"
+        f"Module root: {module_dir}\n"
+        "This is the installed root of the module."
+        " Resolve all relative file references in"
+        " this document against the path above.\n"
+        f"Example: packs/foo.md -> {module_dir}/packs/foo.md\n"
+    )
+
+
+def _inject_preamble(content: str, module_dir: Path | None) -> str:
+    """Inject module-dir preamble into markdown content.
+
+    If the content has YAML frontmatter (starts with ``---``), the preamble
+    is placed between the closing ``---`` and the body.  Otherwise the
+    preamble is prepended to the content.
+
+    When *module_dir* is ``None`` the content is returned unchanged.
+    """
+    if module_dir is None:
+        return content
+
+    preamble = _build_module_dir_preamble(module_dir)
+
+    if content.startswith("---"):
+        # Has frontmatter — inject after closing ---
+        first_newline = content.index("\n")
+        closing_idx = content.find("---", first_newline + 1)
+        if closing_idx == -1:
+            # Malformed frontmatter (no closing ---) — prepend instead
+            return preamble.lstrip("\n") + content
+        closing_end = closing_idx + 3  # past the "---"
+        return content[:closing_end] + preamble + content[closing_end:]
+    # No frontmatter — prepend (strip leading newline since
+    # there's no frontmatter to separate from)
+    return preamble.lstrip("\n") + content
+
+
 def _generate_passthrough_command(
     source_path: Path,
     dest_dir: Path,
     filename: str,
+    *,
+    module_dir: Path | None = None,
 ) -> bool:
-    """Generate command by copying content as-is."""
+    """Generate command by copying content as-is.
+
+    A multi-file command may ship a co-named sidecar directory of supporting
+    procedure files next to its entry file (``commands/<cmd>/`` alongside
+    ``commands/<cmd>.md``). The entry file reads those via a path relative to
+    its own location (e.g. ``${COMMAND_DIR}/<cmd>/phase.md``), so the sidecar
+    directory is copied under the installed entry file's stem to keep those
+    references resolvable.
+    """
     if not source_path.exists():
         return False
     dest_dir.mkdir(parents=True, exist_ok=True)
     content = source_path.read_text()
+    content = _inject_preamble(content, module_dir)
     (dest_dir / filename).write_text(content)
+
+    sidecar_src = source_path.parent / source_path.stem
+    sidecar_dest = dest_dir / Path(filename).stem
+    if sidecar_src.is_dir():
+        if sidecar_dest.is_dir():
+            shutil.rmtree(sidecar_dest)
+        elif sidecar_dest.exists():
+            sidecar_dest.unlink()
+        shutil.copytree(sidecar_src, sidecar_dest)
+    elif sidecar_dest.is_dir():
+        # Source no longer ships a sidecar — remove the stale installed copy.
+        shutil.rmtree(sidecar_dest)
     return True
 
 
@@ -774,8 +948,14 @@ def _generate_agent_with_frontmatter(
     dest_dir: Path,
     filename: str,
     frontmatter_additions: dict,
+    *,
+    module_dir: Path | None = None,
 ) -> bool:
-    """Generate agent file with additional frontmatter fields."""
+    """Generate agent file with additional frontmatter fields.
+
+    When module_dir is provided, a module-dir preamble block is injected
+    between frontmatter and body content.
+    """
     if not source_path.exists():
         return False
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -785,22 +965,31 @@ def _generate_agent_with_frontmatter(
     frontmatter.update(frontmatter_additions)
 
     frontmatter_str = yaml.dump(
-        frontmatter, default_flow_style=False, sort_keys=False
+        frontmatter,
+        default_flow_style=False,
+        sort_keys=False,
     ).rstrip()
-    content = f"---\n{frontmatter_str}\n---\n{body}"
+
+    preamble = ""
+    if module_dir is not None:
+        preamble = _build_module_dir_preamble(module_dir)
+
+    content = f"---\n{frontmatter_str}\n---\n{preamble}{body}"
 
     (dest_dir / filename).write_text(content)
     return True
 
 
 def _get_content_path(
-    local_module_path: Path, content_dirname: Optional[str] = None
+    local_module_path: Path,
+    content_dirname: str | None = None,
 ) -> Path:
     """Get the content path for a local module.
 
     Args:
         local_module_path: Path to the copied module in .lola/modules/
-        content_dirname: Subdirectory containing module content (e.g., "lola-module", "module")
+        content_dirname: Subdirectory containing module content
+                        (e.g., "lola-module", "module")
                         None = auto-detect using standard candidates
 
     Returns:
@@ -814,9 +1003,9 @@ def _get_content_path(
 
     # Standard content directory names to try (in order of preference)
     # Add new standard directory names here to support additional conventions
-    CONTENT_DIR_CANDIDATES = ["module", "lola-module"]
+    content_dir_candidates = ["module", "lola-module"]
 
-    for candidate in CONTENT_DIR_CANDIDATES:
+    for candidate in content_dir_candidates:
         candidate_path = local_module_path / candidate
         if candidate_path.exists() and candidate_path.is_dir():
             return candidate_path
@@ -826,7 +1015,9 @@ def _get_content_path(
 
 
 def _skill_source_dir(
-    local_module_path: Path, skill_name: str, content_dirname: Optional[str] = None
+    local_module_path: Path,
+    skill_name: str,
+    content_dirname: str | None = None,
 ) -> Path:
     """Find the source directory for a skill.
 
@@ -838,8 +1029,6 @@ def _skill_source_dir(
     content_path = _get_content_path(local_module_path, content_dirname)
 
     # Check for single skill at content_path root
-    from lola.config import SKILL_FILE
-
     single_skill_file = content_path / SKILL_FILE
     if single_skill_file.exists() and single_skill_file.is_file():
         return content_path
@@ -920,7 +1109,7 @@ def _remove_mcps_from_file(
         existing_config["mcpServers"].pop(name, None)
 
     # Write back (or delete if mcpServers is empty and only $schema remains)
-    remaining_keys = {k for k in existing_config.keys() if k != "$schema"}
+    remaining_keys = {k for k in existing_config if k != "$schema"}
     if not existing_config["mcpServers"] and remaining_keys == {"mcpServers"}:
         dest_path.unlink()
     else:

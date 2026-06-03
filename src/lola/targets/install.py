@@ -4,6 +4,7 @@ Install orchestration functions for lola targets.
 This module provides:
 - Registry management (get_registry)
 - Module copying (copy_module_to_local)
+- Module tree installation (_install_module_tree / _uninstall_module_tree)
 - Installation helpers for skills, commands, agents, instructions, MCPs
 - The main install_to_assistant orchestration function
 """
@@ -15,14 +16,14 @@ import os
 import shutil
 import subprocess  # nosec B404 - required for running install hook scripts
 from pathlib import Path
-from typing import Optional, cast
+from typing import cast
 
 import click
 from rich.console import Console
 
-import lola.config as config
+from lola import config
 from lola.exceptions import InstallationError
-from lola.models import Installation, InstallationRegistry, Module
+from lola.models import INSTRUCTIONS_FILE, Installation, InstallationRegistry, Module
 from lola.prompts import is_interactive, prompt_agent_conflict, prompt_command_conflict
 
 from .base import (
@@ -40,7 +41,7 @@ console = Console()
 # =============================================================================
 
 
-def _run_install_hook(
+def _run_install_hook(  # noqa: PLR0913
     hook_type: str,
     script_path: str,
     module: Module,
@@ -63,12 +64,12 @@ def _run_install_hook(
 
     try:
         full_script_path.relative_to(local_module_path.resolve())
-    except ValueError:
+    except ValueError as err:
         raise InstallationError(
             module.name,
             assistant,
             f"{hook_type} script outside module directory: {script_path}",
-        )
+        ) from err
 
     env = os.environ.copy()
     env.update(
@@ -79,7 +80,7 @@ def _run_install_hook(
             "LOLA_ASSISTANT": assistant,
             "LOLA_SCOPE": scope,
             "LOLA_HOOK": hook_type,
-        }
+        },
     )
 
     console.print(f"  [dim]Running {hook_type} script: {script_path}[/dim]")
@@ -91,6 +92,7 @@ def _run_install_hook(
             env=env,
             text=True,
             timeout=300,
+            check=False,
         )
 
         if result.returncode != 0:
@@ -100,16 +102,18 @@ def _run_install_hook(
                 f"{hook_type} script failed (exit code {result.returncode})",
             )
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as err:
         raise InstallationError(
-            module.name, assistant, f"{hook_type} script timed out after 5 minutes"
-        )
-    except FileNotFoundError:
+            module.name,
+            assistant,
+            f"{hook_type} script timed out after 5 minutes",
+        ) from err
+    except FileNotFoundError as err:
         raise InstallationError(
             module.name,
             assistant,
             f"{hook_type} script is not executable: {script_path}",
-        )
+        ) from err
 
 
 # =============================================================================
@@ -126,7 +130,7 @@ def get_registry() -> InstallationRegistry:
 # =============================================================================
 
 
-def _get_content_dirname(module: Module) -> Optional[str]:
+def _get_content_dirname(module: Module) -> str | None:
     """Extract content subdirectory name from module.
 
     Returns:
@@ -164,6 +168,47 @@ def copy_module_to_local(module: Module, local_modules_path: Path) -> Path:
     return dest
 
 
+def _install_module_tree(
+    target: AssistantTarget,
+    module: Module,
+    local_module_path: Path,
+    project_path: str | None,
+    scope: str = "project",
+) -> Path | None:
+    """Copy module content tree to target's modules directory.
+
+    Copies the full content directory (skills/, commands/, agents/,
+    packs/, and any other directories) to the target assistant's
+    modules/<name>/ directory. This preserves internal relative paths
+    so agents can find module-specific resources like convention packs.
+
+    Returns the destination path, or None if copy failed.
+    """
+    try:
+        path_context = project_path or ""
+        module_dest = target.get_module_path(path_context, scope) / module.name
+
+        content_dirname = _get_content_dirname(module)
+        content_path = _get_content_path(local_module_path, content_dirname)
+
+        if module_dest.is_symlink():
+            module_dest.unlink()
+        elif module_dest.exists():
+            shutil.rmtree(module_dest)
+        module_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(content_path, module_dest)
+    except NotImplementedError:
+        return None
+    except OSError as exc:
+        console.print(
+            f"[yellow]Warning: could not copy module tree for"
+            f" '{module.name}': {exc}[/yellow]",
+        )
+        return None
+    else:
+        return module_dest
+
+
 def _check_skill_exists(
     target: AssistantTarget,
     skill_name: str,
@@ -179,21 +224,18 @@ def _check_skill_exists(
     if target.uses_managed_section:
         # For managed sections, we allow overwriting since skills are grouped by module
         return False
-    else:
-        # For file-based targets, check if directory/file exists
-        if target.name == "cursor":
-            return (skill_dest / f"{skill_name}.mdc").exists()
-        else:
-            return (skill_dest / skill_name).exists()
+    # For file-based targets, check if skill directory/file exists
+    return (skill_dest / skill_name).exists()
 
 
-def _install_skills(
+def _install_skills(  # noqa: PLR0912, PLR0913
     target: AssistantTarget,
     module: Module,
     local_module_path: Path,
     project_path: str | None,
     scope: str = "project",
     force: bool = False,
+    module_dir: Path | None = None,
 ) -> tuple[list[str], list[str]]:
     """Install skills for a target. Returns (installed, failed) lists."""
     if not module.skills:
@@ -220,7 +262,11 @@ def _install_skills(
                 failed.append(skill)
         if batch_skills:
             target.generate_skills_batch(
-                skill_dest, module.name, batch_skills, project_path
+                skill_dest,
+                module.name,
+                batch_skills,
+                project_path,
+                module_dir=module_dir,
             )
     else:
         for skill in module.skills:
@@ -233,12 +279,14 @@ def _install_skills(
                     # Force mode: overwrite without prompting
                     pass
                 elif click.confirm(
-                    f"Skill '{skill_name}' already exists. Overwrite?", default=False
+                    f"Skill '{skill_name}' already exists. Overwrite?",
+                    default=False,
                 ):
                     # User chose to overwrite
                     pass
                 elif click.confirm(
-                    f"Use prefixed name '{module.name}_{skill}' instead?", default=True
+                    f"Use prefixed name '{module.name}_{skill}' instead?",
+                    default=True,
                 ):
                     # User chose to use prefixed name
                     skill_name = f"{module.name}_{skill}"
@@ -247,7 +295,13 @@ def _install_skills(
                     console.print(f"  [yellow]Skipped {skill}[/yellow]")
                     continue
 
-            if target.generate_skill(source, skill_dest, skill_name, project_path):
+            if target.generate_skill(
+                source,
+                skill_dest,
+                skill_name,
+                project_path,
+                module_dir=module_dir,
+            ):
                 installed.append(skill_name)
             else:
                 failed.append(skill)
@@ -255,13 +309,14 @@ def _install_skills(
     return installed, failed
 
 
-def _install_commands(
+def _install_commands(  # noqa: PLR0913
     target: AssistantTarget,
     module: Module,
     local_module_path: Path,
     project_path: str | None,
     force: bool = False,
     scope: str = "project",
+    module_dir: Path | None = None,
 ) -> tuple[list[str], list[str]]:
     """Install commands for a target. Returns (installed, failed) lists."""
     if not module.commands:
@@ -289,10 +344,16 @@ def _install_commands(
             if action == "skip":
                 failed.append(cmd)
                 continue
-            elif action == "rename":
+            if action == "rename":
                 effective_cmd = new_name
 
-        if target.generate_command(source, command_dest, effective_cmd, module.name):
+        if target.generate_command(
+            source,
+            command_dest,
+            effective_cmd,
+            module.name,
+            module_dir=module_dir,
+        ):
             installed.append(effective_cmd)
         else:
             failed.append(cmd)
@@ -300,15 +361,21 @@ def _install_commands(
     return installed, failed
 
 
-def _install_agents(
+def _install_agents(  # noqa: PLR0913
     target: AssistantTarget,
     module: Module,
     local_module_path: Path,
     project_path: str | None,
     force: bool = False,
     scope: str = "project",
+    module_dir: Path | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Install agents for a target. Returns (installed, failed) lists."""
+    """Install agents for a target. Returns (installed, failed) lists.
+
+    When module_dir is provided, each generated agent file receives a
+    boundary-delimited module-dir preamble pointing to the installed
+    module tree so agents can locate module-relative resources at runtime.
+    """
     if not module.agents or not target.supports_agents:
         return [], []
 
@@ -336,10 +403,16 @@ def _install_agents(
             if action == "skip":
                 failed.append(agent)
                 continue
-            elif action == "rename":
+            if action == "rename":
                 effective_agent = new_name
 
-        if target.generate_agent(source, agent_dest, effective_agent, module.name):
+        if target.generate_agent(
+            source,
+            agent_dest,
+            effective_agent,
+            module.name,
+            module_dir=module_dir,
+        ):
             installed.append(effective_agent)
         else:
             failed.append(agent)
@@ -347,7 +420,7 @@ def _install_agents(
     return installed, failed
 
 
-def _install_instructions(
+def _install_instructions(  # noqa: PLR0911, PLR0913
     target: AssistantTarget,
     module: Module,
     local_module_path: Path,
@@ -356,7 +429,6 @@ def _install_instructions(
     scope: str = "project",
 ) -> bool:
     """Install module instructions for a target. Returns True if installed."""
-    from lola.models import INSTRUCTIONS_FILE
 
     if not module.has_instructions:
         return False
@@ -365,7 +437,7 @@ def _install_instructions(
         return False
 
     # Type checker: at this point project_path is guaranteed to be a string
-    instructions_dest = target.get_instructions_path(cast(str, project_path), scope)
+    instructions_dest = target.get_instructions_path(cast("str", project_path), scope)
 
     # --append-context: insert a reference instead of verbatim copy
     if append_context:
@@ -376,7 +448,7 @@ def _install_instructions(
 
         try:
             relative_path = context_file.resolve().relative_to(
-                Path(cast(str, project_path)).resolve()
+                Path(cast("str", project_path)).resolve(),
             )
         except ValueError:
             relative_path = context_file.resolve()
@@ -395,7 +467,9 @@ def _install_instructions(
         return False
 
     return target.generate_instructions(
-        instructions_source, instructions_dest, module.name
+        instructions_source,
+        instructions_dest,
+        module.name,
     )
 
 
@@ -436,7 +510,7 @@ def _install_mcps(
     return [], list(module.mcps)
 
 
-def _print_summary(
+def _print_summary(  # noqa: PLR0912, PLR0913
     assistant: str,
     installed_skills: list[str],
     installed_commands: list[str],
@@ -447,7 +521,7 @@ def _print_summary(
     failed_commands: list[str],
     failed_agents: list[str],
     failed_mcps: list[str],
-    module_name: str,
+    _module_name: str,
     verbose: bool,
 ) -> None:
     """Print installation summary."""
@@ -463,19 +537,20 @@ def _print_summary(
     parts: list[str] = []
     if installed_skills:
         parts.append(
-            f"{len(installed_skills)} skill{'s' if len(installed_skills) != 1 else ''}"
+            f"{len(installed_skills)} skill{'s' if len(installed_skills) != 1 else ''}",
         )
     if installed_commands:
+        count = len(installed_commands)
         parts.append(
-            f"{len(installed_commands)} command{'s' if len(installed_commands) != 1 else ''}"
+            f"{count} command{'s' if count != 1 else ''}",
         )
     if installed_agents:
         parts.append(
-            f"{len(installed_agents)} agent{'s' if len(installed_agents) != 1 else ''}"
+            f"{len(installed_agents)} agent{'s' if len(installed_agents) != 1 else ''}",
         )
     if installed_mcps:
         parts.append(
-            f"{len(installed_mcps)} MCP{'s' if len(installed_mcps) != 1 else ''}"
+            f"{len(installed_mcps)} MCP{'s' if len(installed_mcps) != 1 else ''}",
         )
     if has_instructions:
         parts.append("instructions")
@@ -505,22 +580,27 @@ def _print_summary(
             console.print(f"    [red]{mcp}[/red] [dim](source not found)[/dim]")
 
 
-def install_to_assistant(
+def install_to_assistant(  # noqa: PLR0913
     module: Module,
     assistant: str,
     scope: str,
-    project_path: Optional[str],
+    project_path: str | None,
     local_modules: Path,
     registry: InstallationRegistry,
     verbose: bool = False,
     force: bool = False,
-    pre_install_script: Optional[str] = None,
-    post_install_script: Optional[str] = None,
-    append_context: Optional[str] = None,
+    pre_install_script: str | None = None,
+    post_install_script: str | None = None,
+    append_context: str | None = None,
 ) -> int:
-    """Install module to a specific assistant."""
-    # Late import to avoid circular imports - get_target is defined in __init__.py
-    from lola.targets import get_target
+    """Install module to a specific assistant.
+
+    Copies the module to the project's .lola/modules/, then installs the
+    full module content tree to the target's modules/<name>/ directory,
+    followed by skills, commands, agents (with module_dir preamble),
+    MCPs, and instructions.
+    """
+    from lola.targets import get_target  # noqa: PLC0415 - circular import
 
     target = get_target(assistant)
 
@@ -542,20 +622,56 @@ def install_to_assistant(
                 shutil.rmtree(local_module_path)
             raise
 
+    # Copy module content tree to target namespace
+    module_dir = _install_module_tree(
+        target,
+        module,
+        local_module_path,
+        project_path,
+        scope,
+    )
+
     installed_skills, failed_skills = _install_skills(
-        target, module, local_module_path, project_path, scope, force
+        target,
+        module,
+        local_module_path,
+        project_path,
+        scope,
+        force,
+        module_dir=module_dir,
     )
     installed_commands, failed_commands = _install_commands(
-        target, module, local_module_path, project_path, force, scope
+        target,
+        module,
+        local_module_path,
+        project_path,
+        force,
+        scope,
+        module_dir=module_dir,
     )
     installed_agents, failed_agents = _install_agents(
-        target, module, local_module_path, project_path, force, scope
+        target,
+        module,
+        local_module_path,
+        project_path,
+        force,
+        scope,
+        module_dir=module_dir,
     )
     installed_mcps, failed_mcps = _install_mcps(
-        target, module, local_module_path, project_path, scope
+        target,
+        module,
+        local_module_path,
+        project_path,
+        scope,
     )
     instructions_installed = _install_instructions(
-        target, module, local_module_path, project_path, append_context, scope
+        target,
+        module,
+        local_module_path,
+        project_path,
+        append_context,
+        scope,
     )
 
     _print_summary(
@@ -592,7 +708,7 @@ def install_to_assistant(
                 mcps=installed_mcps,
                 has_instructions=instructions_installed,
                 append_context=append_context,
-            )
+            ),
         )
 
     if post_install_script:
@@ -610,7 +726,7 @@ def install_to_assistant(
             console.print("[yellow]Warning: post-install hook failed[/yellow]")
             console.print(f"[yellow]{e}[/yellow]")
             console.print(
-                "[yellow]Installation completed but post-install hook failed[/yellow]"
+                "[yellow]Installation completed but post-install hook failed[/yellow]",
             )
 
     return (
@@ -735,14 +851,47 @@ def _uninstall_mcps(
     return [], list(inst.mcps)
 
 
-def _print_uninstall_summary(
+def _uninstall_module_tree(
+    target: AssistantTarget,
+    inst: Installation,
+) -> bool:
+    """Remove the module content tree from target's modules directory.
+
+    Idempotent: returns False if the directory does not exist.
+    """
+    try:
+        path_context = inst.project_path or ""
+        module_dest = (
+            target.get_module_path(path_context, inst.scope) / inst.module_name
+        )
+        if module_dest.is_symlink():
+            module_dest.unlink()
+            removed = True
+        elif module_dest.exists():
+            shutil.rmtree(module_dest)
+            removed = True
+        else:
+            removed = False
+    except NotImplementedError:
+        return False
+    except OSError as exc:
+        console.print(
+            f"[yellow]Warning: could not remove module tree for"
+            f" '{inst.module_name}': {exc}[/yellow]",
+        )
+        return False
+    else:
+        return removed
+
+
+def _print_uninstall_summary(  # noqa: PLR0913
     assistant: str,
     removed_skills: list[str],
     removed_commands: list[str],
     removed_agents: list[str],
     removed_mcps: list[str],
     had_instructions: bool,
-    module_name: str,
+    _module_name: str,
     verbose: bool,
 ) -> None:
     """Print uninstall summary."""
@@ -758,15 +907,16 @@ def _print_uninstall_summary(
     parts: list[str] = []
     if removed_skills:
         parts.append(
-            f"{len(removed_skills)} skill{'s' if len(removed_skills) != 1 else ''}"
+            f"{len(removed_skills)} skill{'s' if len(removed_skills) != 1 else ''}",
         )
     if removed_commands:
+        count = len(removed_commands)
         parts.append(
-            f"{len(removed_commands)} command{'s' if len(removed_commands) != 1 else ''}"
+            f"{count} command{'s' if count != 1 else ''}",
         )
     if removed_agents:
         parts.append(
-            f"{len(removed_agents)} agent{'s' if len(removed_agents) != 1 else ''}"
+            f"{len(removed_agents)} agent{'s' if len(removed_agents) != 1 else ''}",
         )
     if removed_mcps:
         parts.append(f"{len(removed_mcps)} MCP{'s' if len(removed_mcps) != 1 else ''}")
@@ -792,9 +942,13 @@ def uninstall_from_assistant(
     inst: Installation,
     registry: InstallationRegistry,
     verbose: bool = False,
-    local_modules: Optional[Path] = None,
+    local_modules: Path | None = None,
 ) -> int:
     """Uninstall module from a specific assistant.
+
+    Removes skills, commands, agents, MCPs, instructions, and the module
+    content tree from the target's modules/<name>/ directory. Also cleans
+    up the local module copy if local_modules is provided.
 
     Args:
         inst: Installation record describing what to remove
@@ -805,8 +959,7 @@ def uninstall_from_assistant(
     Returns:
         Count of items removed
     """
-    # Late import to avoid circular imports
-    from lola.targets import get_target
+    from lola.targets import get_target  # noqa: PLC0415 - circular import
 
     target = get_target(inst.assistant)
 
@@ -815,6 +968,8 @@ def uninstall_from_assistant(
     removed_agents, _ = _uninstall_agents(target, inst)
     removed_mcps, _ = _uninstall_mcps(target, inst)
     instructions_removed = _uninstall_instructions(target, inst)
+
+    _uninstall_module_tree(target, inst)
 
     _print_uninstall_summary(
         inst.assistant,

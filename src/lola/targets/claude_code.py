@@ -5,13 +5,15 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import lola.config as config
+from lola import config
+
 from .base import (
     BaseAssistantTarget,
     ManagedInstructionsTarget,
     MCPSupportMixin,
     _generate_agent_with_frontmatter,
     _generate_passthrough_command,
+    _inject_preamble,
 )
 
 
@@ -39,6 +41,11 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
             return Path.home() / ".claude" / self.INSTRUCTIONS_FILE
         return Path(project_path) / self.INSTRUCTIONS_FILE
 
+    def get_module_path(self, project_path: str, scope: str = "project") -> Path:
+        """Return .claude/modules for module content tree installation."""
+        base = Path.home() if scope == "user" else Path(project_path)
+        return base / ".claude" / "modules"
+
     def get_mcp_path(self, project_path: str, scope: str = "project") -> Path:
         base = Path.home() if scope == "user" else Path(project_path)
         return base / ".mcp.json"
@@ -49,6 +56,8 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
         dest_path: Path,
         skill_name: str,
         project_path: str | None = None,  # noqa: ARG002
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         """Copy skill directory with SKILL.md and supporting files."""
         if not source_path.exists():
@@ -60,7 +69,8 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
         # Copy SKILL.md
         skill_file = source_path / config.SKILL_FILE
         if skill_file.exists():
-            (skill_dest / "SKILL.md").write_text(skill_file.read_text())
+            content = _inject_preamble(skill_file.read_text(), module_dir)
+            (skill_dest / "SKILL.md").write_text(content)
 
         # Copy supporting files
         for item in source_path.iterdir():
@@ -81,9 +91,16 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
         dest_dir: Path,
         cmd_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         filename = self.get_command_filename(module_name, cmd_name)
-        return _generate_passthrough_command(source_path, dest_dir, filename)
+        return _generate_passthrough_command(
+            source_path,
+            dest_dir,
+            filename,
+            module_dir=module_dir,
+        )
 
     def generate_agent(
         self,
@@ -91,6 +108,8 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
         dest_dir: Path,
         agent_name: str,
         module_name: str,
+        *,
+        module_dir: Path | None = None,
     ) -> bool:
         filename = self.get_agent_filename(module_name, agent_name)
         # Claude Code requires 'name' field in agent frontmatter
@@ -100,4 +119,5 @@ class ClaudeCodeTarget(MCPSupportMixin, ManagedInstructionsTarget, BaseAssistant
             dest_dir,
             filename,
             {"name": agent_full_name, "model": "inherit"},
+            module_dir=module_dir,
         )

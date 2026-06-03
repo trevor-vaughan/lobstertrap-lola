@@ -34,6 +34,8 @@ lint: ## - run ruff (check + format check) and mypy on src
 	@uv run ruff format --check src tests
 	@echo "Running mypy..."
 	@uv run mypy src
+	@echo "Running ty check..."
+	@uv run ty check
 
 # Subtrees clean must never descend into: virtualenv, lola state, git internals.
 # -prune (not -not -path) is required to skip the subtree entirely — otherwise

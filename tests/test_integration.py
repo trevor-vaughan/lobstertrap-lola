@@ -586,6 +586,9 @@ class TestScopedInstallation:
         """Commands with --scope user should go to ~/.claude/commands, not cwd."""
         from pathlib import Path
 
+        # Ensure CWD is writable so local module copy succeeds
+        monkeypatch.chdir(integration_env["project"])
+
         # Mock Path.home() to return a controlled location
         fake_home = integration_env["project"].parent / "fake_home"
         fake_home.mkdir()
@@ -617,6 +620,9 @@ class TestScopedInstallation:
     def test_user_scope_agents_installed_to_home(self, integration_env, monkeypatch):
         """Agents with --scope user should go to ~/.claude/agents, not cwd."""
         from pathlib import Path
+
+        # Ensure CWD is writable so local module copy succeeds
+        monkeypatch.chdir(integration_env["project"])
 
         # Mock Path.home() to return a controlled location
         fake_home = integration_env["project"].parent / "fake_home"

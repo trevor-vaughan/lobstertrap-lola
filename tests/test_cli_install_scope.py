@@ -25,11 +25,13 @@ def test_install_user_scope_with_explicit_path_fails():
 
 
 def test_install_user_scope_without_path_succeeds(
-    mock_lola_home, registered_module, monkeypatch
+    mock_lola_home, registered_module, monkeypatch, tmp_path
 ):
     """User scope without explicit path should succeed."""
     # Set HOME to a temp path to avoid polluting real home
     monkeypatch.setenv("HOME", str(mock_lola_home["home"].parent / "fakehome"))
+    # Ensure CWD is writable so local module copy succeeds
+    monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(

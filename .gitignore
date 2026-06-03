@@ -45,6 +45,7 @@ site/
 
 # Plans (local only)
 plan/
+docs/superpowers/
 
 # Environment and logs
 .env*

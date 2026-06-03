@@ -83,9 +83,15 @@ my-module/
         scripts/
     commands/
       review.md
+      review/        # Optional: sidecar directory for multi-file commands
+        phase-1.md
     agents/
       helper.md
+    packs/           # Optional: any extra directories are preserved
+      conventions.md
 ```
+
+Any directories beyond the standard `skills/`, `commands/`, and `agents/` are preserved during installation. The entire module content tree is copied to the target assistant's `modules/<name>/` directory (e.g., `.claude/modules/my-module/`), maintaining all internal relative paths. This allows agents to reference shared resources like convention packs, templates, or protocol files at runtime.
 
 ## Appending Context References
 
