@@ -2,6 +2,9 @@
 
 **Write Agent Skills and Contexts once, use everywhere.**
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13138/badge)](https://www.bestpractices.dev/projects/13138)
+[![Matrix](https://img.shields.io/badge/chat-Matrix-blue?logo=matrix)](https://matrix.to/#/#lola-ai:matrix.org)
+
 Lola is a universal AI Package Manager. If an agent's skills were an RPM, Lola is the DNF for it. Write your [skills and context modules](https://lobstertrap.org/lola/concepts/skills-and-modules/) once as portable packages, then install them to any AI assistant or agent with a single command.
 
 [![asciicast](https://asciinema.org/a/1035360.svg)](https://asciinema.org/a/1035360)
